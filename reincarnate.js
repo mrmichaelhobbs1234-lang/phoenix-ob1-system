@@ -1,4 +1,4 @@
-// reincarnate.js - Phoenix OB1 System v109.0-JWT-FIX
+// reincarnate.js - Phoenix OB1 System v109.1-JWT-ENDPOINT-FIX
 // B0: Deepgram voice transcription (JWT authentication)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
@@ -168,13 +168,13 @@ async function callDeepSeek(messages, env) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// V109.0 JWT-AUTHENTICATED VOICE TEST
+// V109.1 JWT-AUTHENTICATED VOICE TEST
 const VOICE_TEST_HTML = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phoenix Voice - v109.0 JWT FIX</title>
+  <title>Phoenix Voice - v109.1 JWT ENDPOINT FIX</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; padding: 2rem; }
@@ -196,8 +196,8 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <div class="header">
-    <h1>PHOENIX VOICE v109.0</h1>
-    <p>JWT Authentication - Error 1006 FIXED</p>
+    <h1>PHOENIX VOICE v109.1</h1>
+    <p>JWT Authentication - ENDPOINT FIXED</p>
   </div>
   <div class="status">
     <div>Status: <span id="status">Loading...</span></div>
@@ -367,7 +367,7 @@ export default {
       });
     }
     
-    // NEW: JWT token endpoint for browser WebSocket authentication
+    // JWT token endpoint for browser WebSocket authentication - FIXED ENDPOINT
     if (url.pathname === '/deepgram-jwt') {
       try {
         const apiKey = env.DEEPGRAM_API_KEY;
@@ -378,22 +378,18 @@ export default {
           });
         }
 
-        // Call Deepgram auth API to get temporary JWT token
-        const response = await fetch('https://api.deepgram.com/v1/auth/keys/temporary', {
+        // Call Deepgram auth API to get temporary JWT token (CORRECT ENDPOINT: v1/auth/grant)
+        const response = await fetch('https://api.deepgram.com/v1/auth/grant', {
           method: 'POST',
           headers: {
             'Authorization': `Token ${apiKey}`,
             'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            scopes: ['usage:write'],
-            timeToLive: 60
-          })
+          }
         });
 
         if (!response.ok) {
           const error = await response.text();
-          return new Response(JSON.stringify({ error: `Deepgram auth failed: ${error}` }), {
+          return new Response(JSON.stringify({ error: `Deepgram auth failed (${response.status}): ${error}` }), {
             status: response.status,
             headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
           });
@@ -423,11 +419,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v109.0-JWT-FIX',
+        version: 'v109.1-JWT-ENDPOINT-FIX',
         gospel: '444',
         reality: 'C',
         benchmarks: {
-          b0: env.DEEPGRAM_API_KEY ? 'v109.0-JWT-AUTH' : 'missing-key',
+          b0: env.DEEPGRAM_API_KEY ? 'v109.1-JWT-AUTH' : 'missing-key',
           b1: 'operational',
           b2: 'pending', b3: 'pending', b4: 'pending'
         },
@@ -589,7 +585,7 @@ You are live. Be helpful, not theatrical.`;
       }
     }
     
-    return new Response('Phoenix OB1 System v109.0-JWT-FIX - /test-voice.html for B0, /magic-chat for B1', { 
+    return new Response('Phoenix OB1 System v109.1-JWT-ENDPOINT-FIX - /test-voice.html for B0, /magic-chat for B1', { 
       status: 404,
       headers: { 'Access-Control-Allow-Origin': '*' }
     });
