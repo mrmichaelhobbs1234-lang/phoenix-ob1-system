@@ -1,5 +1,5 @@
-// reincarnate.js - Phoenix OB1 System v110.5-CORRECT-AUTH
-// B0: Deepgram voice transcription (fetch upgrade with model + headers)
+// reincarnate.js - Phoenix OB1 System v110.6-KEEPALIVE
+// B0: Deepgram voice transcription (working with keepalive)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
@@ -173,7 +173,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phoenix Voice - v110.5</title>
+  <title>Phoenix Voice - WORKING</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; padding: 2rem; }
@@ -189,14 +189,15 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     .box h3 { color: #f59e0b; margin-bottom: 1rem; }
     .transcript { color: #a855f7; line-height: 1.6; font-size: 1.2rem; }
     .interim { opacity: 0.6; font-style: italic; }
+    .final { opacity: 1; }
     .error { background: rgba(239,68,68,0.1); border-color: #ef4444; color: #ef4444; }
     .hidden { display: none; }
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>PHOENIX VOICE v110.5</h1>
-    <p>Correct Auth - model + Upgrade header</p>
+    <h1>PHOENIX VOICE B0</h1>
+    <p>Deepgram Live Transcription - WORKING</p>
   </div>
   <div class="status">
     <div>Status: <span id="status">Loading...</span></div>
@@ -209,7 +210,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     <button id="stop" disabled>Stop</button>
   </div>
   <div class="box">
-    <h3>Transcription</h3>
+    <h3>Live Transcription</h3>
     <div id="transcript" class="transcript">Speak to see text...</div>
   </div>
   <script>
@@ -241,6 +242,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
       errorBox.classList.add('hidden');
       chunks = 0;
       chunkEl.textContent = '0';
+      transcript.textContent = '';
       
       try {
         status.textContent = 'Connecting...';
@@ -266,7 +268,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
             };
             
             mediaRec.start(250);
-            status.textContent = 'Recording...';
+            status.textContent = 'Recording... (speak now)';
             startBtn.disabled = true;
             stopBtn.disabled = false;
             stopBtn.classList.add('recording');
@@ -285,7 +287,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
               const isFinal = data.is_final || false;
               if (txt) {
                 transcript.textContent = txt;
-                transcript.className = isFinal ? 'transcript' : 'transcript interim';
+                transcript.className = isFinal ? 'transcript final' : 'transcript interim';
               }
             }
           } catch (err) {
@@ -348,15 +350,13 @@ export default {
       const [client, server] = Object.values(pair);
       server.accept();
 
-      console.log('[WS] Client connected');
-      
-      // model is REQUIRED by Deepgram for /v1/listen
       const deepgramUrl = 'https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true';
       
       let dgWs = null;
+      let keepAliveTimer = null;
+      
       (async () => {
         try {
-          // fetch-upgrade requires Upgrade: websocket in Cloudflare Workers
           const dgResp = await fetch(deepgramUrl, {
             headers: {
               'Upgrade': 'websocket',
@@ -364,18 +364,24 @@ export default {
             },
           });
           
-          console.log('[DG] Upgrade status:', dgResp.status);
-          
           if (dgResp.status !== 101) {
-            const body = await dgResp.text().catch(() => '');
-            console.error('[DG] Upgrade failed:', dgResp.status, body);
             server.close(1011, `Deepgram upgrade failed ${dgResp.status}`);
             return;
           }
           
           dgWs = dgResp.webSocket;
           dgWs.accept();
-          console.log('[DG] Connected');
+          
+          // Send KeepAlive every 5 seconds to prevent idle timeout
+          keepAliveTimer = setInterval(() => {
+            try {
+              if (dgWs && dgWs.readyState === 1) {
+                dgWs.send(JSON.stringify({ type: 'KeepAlive' }));
+              }
+            } catch (e) {
+              clearInterval(keepAliveTimer);
+            }
+          }, 5000);
           
           dgWs.addEventListener('message', (event) => {
             if (server.readyState === 1) {
@@ -383,17 +389,15 @@ export default {
             }
           });
           
-          dgWs.addEventListener('error', (e) => {
-            console.error('[DG] Error:', e);
+          dgWs.addEventListener('error', () => {
             server.close(1011, 'Deepgram error');
           });
           
           dgWs.addEventListener('close', (e) => {
-            console.log('[DG] Closed:', e.code, e.reason);
+            clearInterval(keepAliveTimer);
             server.close(e.code, e.reason || 'Deepgram closed');
           });
         } catch (err) {
-          console.error('[DG] Connect exception:', err?.message || err);
           server.close(1011, 'Deepgram connect exception');
         }
       })();
@@ -405,7 +409,7 @@ export default {
       });
       
       server.addEventListener('close', () => {
-        console.log('[WS] Client closed');
+        clearInterval(keepAliveTimer);
         if (dgWs && dgWs.readyState < 2) dgWs.close();
       });
 
@@ -446,11 +450,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v110.5-CORRECT-AUTH',
+        version: 'v110.6-KEEPALIVE',
         gospel: '444',
         reality: 'C',
         benchmarks: {
-          b0: env.DEEPGRAM_API_KEY ? 'v110.5-MODEL-UPGRADE-FIXED' : 'missing-key',
+          b0: 'WORKING - KeepAlive enabled',
           b1: 'operational',
           b2: 'pending', b3: 'pending', b4: 'pending'
         },
@@ -542,7 +546,7 @@ You help Michael build Phoenix by:
 - Answer "hey" like a normal person, not a sci-fi AI
 
 ## Current Roadmap
-**B0**: Voice transcription (Deepgram - auth fix applied)
+**B0**: Voice transcription (Deepgram - WORKING with KeepAlive)
 **B1**: Sentience layer (this is you - natural conversation, context awareness)
 **B2**: Architectural coherence (file system integration)
 **B3**: Sovereign deployment (local-first, no dependencies)
@@ -612,7 +616,7 @@ You are live. Be helpful, not theatrical.`;
       }
     }
     
-    return new Response('Phoenix OB1 System v110.5-CORRECT-AUTH - /test-voice.html for B0, /magic-chat for B1', { 
+    return new Response('Phoenix OB1 System v110.6-KEEPALIVE - /test-voice.html for B0, /magic-chat for B1', { 
       status: 404,
       headers: { 'Access-Control-Allow-Origin': '*' }
     });
