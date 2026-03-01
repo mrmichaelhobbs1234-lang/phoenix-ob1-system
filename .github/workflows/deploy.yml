@@ -24,28 +24,34 @@ jobs:
           pwd
           ls -la
           echo "=== wrangler.toml ==="
-          sed -n '1,200p' wrangler.toml || true
+          sed -n '1,50p' wrangler.toml || true
           echo "=== reincarnate.js ==="
           ls -la reincarnate.js || true
 
       - name: Install Wrangler
         run: npm install -g wrangler
 
-      - name: Deploy (log-level BEFORE deploy)
+      - name: Deploy to Cloudflare Workers
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_LOG: debug
         run: |
           npx wrangler --version
-          npx wrangler --log-level=debug deploy --config ./wrangler.toml ./reincarnate.js || true
+          npx wrangler deploy --config ./wrangler.toml ./reincarnate.js
+
+      - name: Print Wrangler logs on failure
+        if: failure()
+        run: |
           echo "=== Wrangler logs (last 200 lines) ==="
           ls -la /home/runner/.config/.wrangler/logs || true
           tail -n 200 /home/runner/.config/.wrangler/logs/wrangler-*.log || true
-          exit 1
 
       - name: Deployment Summary
         if: success()
         run: |
           echo "✅ Phoenix OB1 System deployed successfully!"
           echo "📦 Version: v1.6.1-B0-DEPLOY"
-          echo "🔗 Worker URL: https://phoenix-ob1-system.mrmichaelhobbs1234.workers.dev"
+          echo "🔗 Worker: https://phoenix-ob1-system.mrmichaelhobbs1234.workers.dev"
+          echo "🎯 B0 Voice: /test-voice.html"
+          echo "🗣️ B1 Chat: /magic-chat"
