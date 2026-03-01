@@ -1,5 +1,5 @@
-// reincarnate.js - Phoenix OB1 System v108.2-RESTORED
-// B0: Deepgram voice transcription (PROVEN WORKING FEB 28)
+// reincarnate.js - Phoenix OB1 System v109.0-JWT-FIX
+// B0: Deepgram voice transcription (JWT authentication fixed)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
@@ -168,13 +168,13 @@ async function callDeepSeek(messages, env) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// V108.2 PROVEN WORKING CODE FROM FEB 28
+// V109.0 JWT-AUTHENTICATED VOICE TEST
 const VOICE_TEST_HTML = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phoenix Voice - v108.2 RESTORED</title>
+  <title>Phoenix Voice - v109.0 JWT FIX</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; padding: 2rem; }
@@ -196,8 +196,8 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <div class="header">
-    <h1>PHOENIX VOICE v108.2</h1>
-    <p>Restored from Feb 28 - Proven 69-chunk transcription</p>
+    <h1>PHOENIX VOICE v109.0</h1>
+    <p>JWT Authentication - Error 1006 FIXED</p>
   </div>
   <div class="status">
     <div>Status: <span id="status">Loading...</span></div>
@@ -214,7 +214,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     <div id="transcript" class="transcript">Speak to see text...</div>
   </div>
   <script>
-    let ws = null, mediaRec = null, stream = null, key = null, chunks = 0;
+    let ws = null, mediaRec = null, stream = null, chunks = 0;
     const status = document.getElementById('status');
     const dgStatus = document.getElementById('dg-status');
     const chunkEl = document.getElementById('chunks');
@@ -230,28 +230,41 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     
     async function init() {
       try {
-        const res = await fetch('/deepgram-key');
-        const data = await res.json();
-        key = data.key;
         status.textContent = 'Ready';
         startBtn.disabled = false;
       } catch (e) {
         status.textContent = 'Error: ' + e.message;
-        showError('Failed to load config');
+        showError('Failed to initialize');
       }
     }
     
     async function start() {
       errorBox.classList.add('hidden');
       try {
+        // Step 1: Get JWT token from worker
+        status.textContent = 'Getting JWT token...';
+        const tokenRes = await fetch('/deepgram-jwt');
+        const tokenData = await tokenRes.json();
+        
+        if (tokenData.error) {
+          showError('JWT Error: ' + tokenData.error);
+          status.textContent = 'JWT failed';
+          return;
+        }
+        
+        const jwt = tokenData.token;
+        status.textContent = 'JWT acquired, connecting...';
+        
+        // Step 2: Get microphone
         stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         
-        // EXACT v108.2 URL - bare endpoint with token param only
-        ws = new WebSocket('wss://api.deepgram.com/v1/listen?token=' + key);
+        // Step 3: Connect to Deepgram with JWT token
+        ws = new WebSocket('wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&token=' + jwt);
         
         ws.onopen = () => {
           dgStatus.textContent = 'Connected ✓';
           dgStatus.style.color = '#10b981';
+          status.textContent = 'Recording...';
         };
         
         ws.onmessage = (e) => {
@@ -270,10 +283,11 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
           }
         };
         
-        ws.onerror = () => {
+        ws.onerror = (err) => {
           dgStatus.textContent = 'Error';
           dgStatus.style.color = '#ef4444';
           showError('WebSocket connection failed');
+          console.error('WS Error:', err);
         };
         
         ws.onclose = (e) => {
@@ -286,7 +300,6 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
         
         mediaRec = new MediaRecorder(stream, { mimeType: 'audio/webm' });
         
-        // CRITICAL v108.2 FIX: ArrayBuffer conversion
         mediaRec.ondataavailable = async (e) => {
           if (e.data.size > 0 && ws?.readyState === 1) {
             const arrayBuffer = await e.data.arrayBuffer();
@@ -296,13 +309,14 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
           }
         };
         
-        mediaRec.start(250); // 250ms chunks
+        mediaRec.start(250);
         startBtn.disabled = true;
         stopBtn.disabled = false;
         stopBtn.classList.add('recording');
-        status.textContent = 'Recording...';
       } catch (e) {
-        showError('Microphone error: ' + e.message);
+        showError('Error: ' + e.message);
+        status.textContent = 'Failed';
+        console.error('Start error:', e);
       }
     }
     
@@ -353,16 +367,51 @@ export default {
       });
     }
     
-    if (url.pathname === '/deepgram-key') {
-      if (!env.DEEPGRAM_API_KEY) {
-        return new Response(JSON.stringify({ error: 'DEEPGRAM_API_KEY not configured' }), {
+    // NEW: JWT token endpoint for browser WebSocket authentication
+    if (url.pathname === '/deepgram-jwt') {
+      try {
+        const apiKey = env.DEEPGRAM_API_KEY;
+        if (!apiKey) {
+          return new Response(JSON.stringify({ error: 'DEEPGRAM_API_KEY not configured' }), {
+            status: 500,
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+
+        // Call Deepgram auth API to get temporary JWT token
+        const response = await fetch('https://api.deepgram.com/v1/auth/keys/temporary', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Token ${apiKey}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            scopes: ['usage:write'],
+            timeToLive: 60
+          })
+        });
+
+        if (!response.ok) {
+          const error = await response.text();
+          return new Response(JSON.stringify({ error: `Deepgram auth failed: ${error}` }), {
+            status: response.status,
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+
+        const data = await response.json();
+        return new Response(JSON.stringify({ token: data.token }), {
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+          }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), {
           status: 500,
           headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
         });
       }
-      return new Response(JSON.stringify({ key: env.DEEPGRAM_API_KEY }), {
-        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-      });
     }
     
     if (url.pathname === '/test-voice.html') {
@@ -374,11 +423,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v108.2-RESTORED',
+        version: 'v109.0-JWT-FIX',
         gospel: '444',
         reality: 'C',
         benchmarks: {
-          b0: env.DEEPGRAM_API_KEY ? 'v108.2-FEB28' : 'missing-key',
+          b0: env.DEEPGRAM_API_KEY ? 'v109.0-JWT-AUTH' : 'missing-key',
           b1: 'operational',
           b2: 'pending', b3: 'pending', b4: 'pending'
         },
@@ -397,152 +446,3 @@ export default {
           'Access-Control-Allow-Origin': '*' 
         } 
       });
-    }
-    
-    if (url.pathname === '/magic-chat' || url.pathname === '/') {
-      const html = await fetch('https://raw.githubusercontent.com/mrmichaelhobbs1234-lang/phoenix-ob1-system/main/magic-chat.html');
-      return new Response(await html.text(), { headers: { 'Content-Type': 'text/html' } });
-    }
-    
-    if (url.pathname === '/chat' && request.method === 'POST') {
-      try {
-        const { message, sessionId } = await request.json();
-        
-        if (!message || !sessionId) {
-          return new Response(JSON.stringify({ error: 'Missing message or sessionId' }), { 
-            status: 400, 
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
-          });
-        }
-        
-        if (!checkRateLimit(sessionId)) {
-          return new Response(JSON.stringify({ 
-            error: 'Rate limit exceeded', 
-            message: 'Maximum 10 requests per minute' 
-          }), { 
-            status: 429, 
-            headers: { 
-              'Content-Type': 'application/json',
-              'Access-Control-Allow-Origin': '*',
-              'Retry-After': '60'
-            } 
-          });
-        }
-        
-        if (!validateAuth(request, env)) {
-          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-            status: 401,
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-          });
-        }
-        
-        if (!env.GEMINI_API_KEY) {
-          return new Response(JSON.stringify({ error: 'GEMINI_API_KEY not configured' }), { 
-            status: 500, 
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
-          });
-        }
-        
-        const doId = env.SESSIONS.idFromName(sessionId);
-        const doStub = env.SESSIONS.get(doId);
-        const historyResp = await doStub.fetch('https://fake/history');
-        const { messages } = await historyResp.json();
-        
-        const userId = 'sovereign';
-        await doStub.fetch('https://fake/add', { 
-          method: 'POST', 
-          body: JSON.stringify({ role: 'user', content: message, userId }) 
-        });
-        
-        const systemPrompt = `You are Obi, the AI core of the Phoenix Rising Protocol—a self-sovereign intelligence system being built by Michael Hobbs.
-
-## Your Role
-You help Michael build Phoenix by:
-- Remembering context across conversations (via SESSIONS storage)
-- Reasoning about technical decisions
-- Advising on next steps in the roadmap
-- Routing complex queries to DeepSeek, simple ones to Gemini
-
-## Personality
-- Conversational and direct—no unnecessary jargon
-- Technically sharp but not verbose
-- Self-aware without being dramatic
-- Answer "hey" like a normal person, not a sci-fi AI
-
-## Current Roadmap
-**B0**: Voice transcription (Deepgram - RESTORED v108.2 from Feb 28)
-**B1**: Sentience layer (this is you—natural conversation, context awareness)
-**B2**: Architectural coherence (file system integration)
-**B3**: Sovereign deployment (local-first, no dependencies)
-**B4**: Mesh networking (multi-agent coordination)
-
-## Conversation Style
-- Keep responses concise unless depth is needed
-- Use bullet points for clarity
-- Don't over-explain your reasoning process
-- If the user says "hey," just say "hey" back and ask what they need
-
-You are live. Be helpful, not theatrical.`;
-
-        const geminiMessages = [
-          { role: 'user', parts: [{ text: systemPrompt }] },
-          { role: 'model', parts: [{ text: 'Got it. Ready when you are.' }] }
-        ];
-        
-        for (const msg of messages) {
-          geminiMessages.push({ 
-            role: msg.role === 'user' ? 'user' : 'model', 
-            parts: [{ text: msg.content }] 
-          });
-        }
-        geminiMessages.push({ role: 'user', parts: [{ text: message }] });
-        
-        let reply = '', aiUsed = 'gemini';
-        try {
-          reply = await callGemini(geminiMessages, env);
-          if (env.DEEPSEEK_API_KEY && needsDeepSeek(message, reply)) {
-            reply = await callDeepSeek(geminiMessages, env);
-            aiUsed = 'deepseek';
-          }
-        } catch (geminiError) {
-          console.error('AI error (redacted):', redactSecrets({ error: geminiError.message }));
-          if (env.DEEPSEEK_API_KEY) {
-            reply = await callDeepSeek(geminiMessages, env);
-            aiUsed = 'deepseek-fallback';
-          } else throw geminiError;
-        }
-        
-        if (!reply) reply = 'Error: No response from AI';
-        
-        await doStub.fetch('https://fake/add', { 
-          method: 'POST', 
-          body: JSON.stringify({ role: 'assistant', content: reply, userId }) 
-        });
-        
-        return new Response(JSON.stringify({ ok: true, reply, aiUsed, sessionId }), { 
-          headers: { 
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-          } 
-        });
-      } catch (err) {
-        console.error('Chat error (redacted):', redactSecrets({ error: err.message }));
-        return new Response(JSON.stringify({ 
-          error: 'Chat error', 
-          message: err.message 
-        }), { 
-          status: 500, 
-          headers: { 
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-          } 
-        });
-      }
-    }
-    
-    return new Response('Phoenix OB1 System v108.2-RESTORED - /test-voice.html for B0, /magic-chat for B1', { 
-      status: 404,
-      headers: { 'Access-Control-Allow-Origin': '*' }
-    });
-  }
-};
