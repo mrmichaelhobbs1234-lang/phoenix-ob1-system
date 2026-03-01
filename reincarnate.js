@@ -1,4 +1,4 @@
-// reincarnate.js - Phoenix OB1 System v1.5-AUTH-HARDENED
+// reincarnate.js - Phoenix OB1 System v1.6-AUTH-ENFORCED
 // B0: Deepgram voice transcription (browser direct)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
@@ -212,7 +212,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 <body>
   <div class="header">
     <h1>B0 VOICE TEST</h1>
-    <p>Phoenix OB1 System • Voice to Obi • v1.5-AUTH-HARDENED</p>
+    <p>Phoenix OB1 System • Voice to Obi • v1.6-AUTH-ENFORCED</p>
   </div>
   <div class="status">
     <div class="status-item"><span>Config:</span><span class="status-value" id="config-status">Loading...</span></div>
@@ -229,7 +229,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     <div class="transcript-box"><h3>Live Transcription (Deepgram)</h3><div id="transcript" class="transcript-text">Speak to see transcription...</div></div>
     <div class="transcript-box obi-response"><h3>Obi Response (B1)</h3><div id="obi-response" class="transcript-text">Waiting for voice input...</div></div>
   </div>
-  <div class="footer">Gospel 444 • Reality-C • v1.5-AUTH-HARDENED<br>Browser → Deepgram (B0) → Worker /chat (B1)</div>
+  <div class="footer">Gospel 444 • Reality-C • v1.6-AUTH-ENFORCED<br>Browser → Deepgram (B0) → Worker /chat (B1)</div>
   <script>
     const workerUrl = window.location.origin;
     let deepgramApiKey = null, deepgramWs = null, mediaRecorder = null, audioStream = null;
@@ -307,7 +307,7 @@ export default {
       });
     }
     
-    // AUTH CHECK ENDPOINT - NEW
+    // AUTH CHECK ENDPOINT
     if (url.pathname === '/api/authcheck') {
       const isValid = validateAuth(request, env);
       return new Response(JSON.stringify({
@@ -323,16 +323,14 @@ export default {
       });
     }
     
-    // B0: Return Deepgram API key for browser - REQUIRES AUTH
+    // B0: Return Deepgram API key for browser - AUTH ENFORCED
     if (url.pathname === '/deepgram-key') {
-      // Allow anonymous access for demo purposes
-      // TODO: Enable auth requirement after initial testing
-      // if (!validateAuth(request, env)) {
-      //   return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-      //     status: 401,
-      //     headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-      //   });
-      // }
+      if (!validateAuth(request, env)) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+        });
+      }
       
       if (!env.DEEPGRAM_API_KEY) {
         return new Response(JSON.stringify({ error: 'DEEPGRAM_API_KEY not configured' }), {
@@ -356,7 +354,7 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v1.5-AUTH-HARDENED',
+        version: 'v1.6-AUTH-ENFORCED',
         gospel: '444',
         reality: 'C',
         benchmarks: {
@@ -371,7 +369,7 @@ export default {
         },
         auth: {
           sovereignKey: env.SOVEREIGN_KEY ? 'configured' : 'missing',
-          enforcement: 'partial' // Will be 'full' after testing
+          enforcement: 'full'
         }
       }), { 
         headers: { 
@@ -387,7 +385,7 @@ export default {
       return new Response(await html.text(), { headers: { 'Content-Type': 'text/html' } });
     }
     
-    // Chat endpoint - PROTECTED + RATE LIMITED
+    // Chat endpoint - AUTH ENFORCED + RATE LIMITED
     if (url.pathname === '/chat' && request.method === 'POST') {
       try {
         const { message, sessionId } = await request.json();
@@ -415,13 +413,13 @@ export default {
           });
         }
         
-        // Auth enforcement - TODO: Enable after testing
-        // if (!validateAuth(request, env)) {
-        //   return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        //     status: 401,
-        //     headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-        //   });
-        // }
+        // Auth enforcement - ENABLED
+        if (!validateAuth(request, env)) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
+        }
         
         if (!env.GEMINI_API_KEY) {
           return new Response(JSON.stringify({ error: 'GEMINI_API_KEY not configured' }), { 
@@ -435,8 +433,8 @@ export default {
         const historyResp = await doStub.fetch('https://fake/history');
         const { messages } = await historyResp.json();
         
-        // Bind to authenticated user (or anonymous for now)
-        const userId = validateAuth(request, env) ? 'sovereign' : 'anonymous';
+        // Bind to authenticated user
+        const userId = 'sovereign';
         await doStub.fetch('https://fake/add', { 
           method: 'POST', 
           body: JSON.stringify({ role: 'user', content: message, userId }) 
@@ -528,7 +526,7 @@ You are live. Be helpful, not theatrical.`;
       }
     }
     
-    return new Response('Phoenix OB1 System v1.5-AUTH-HARDENED - /magic-chat for B1, /test-voice.html for B0, /api/authcheck for validation', { 
+    return new Response('Phoenix OB1 System v1.6-AUTH-ENFORCED - /magic-chat for B1, /test-voice.html for B0, /api/authcheck for validation', { 
       status: 404,
       headers: { 'Access-Control-Allow-Origin': '*' }
     });
