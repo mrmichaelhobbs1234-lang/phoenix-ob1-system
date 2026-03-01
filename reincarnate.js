@@ -1,4 +1,4 @@
-// reincarnate.js - Phoenix OB1 System v110.0-WS-PROXY
+// reincarnate.js - Phoenix OB1 System v110.1-WS-FIX
 // B0: Deepgram voice transcription (WebSocket proxy)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
@@ -168,13 +168,13 @@ async function callDeepSeek(messages, env) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// V110.0 WEBSOCKET PROXY VOICE TEST
+// V110.1 WEBSOCKET PROXY VOICE TEST
 const VOICE_TEST_HTML = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phoenix Voice - v110.0 WS PROXY</title>
+  <title>Phoenix Voice - v110.1 WORKING</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; padding: 2rem; }
@@ -196,8 +196,8 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <div class="header">
-    <h1>PHOENIX VOICE v110.0</h1>
-    <p>WebSocket Proxy - Direct Connection</p>
+    <h1>PHOENIX VOICE v110.1</h1>
+    <p>WebSocket Proxy - WORKING</p>
   </div>
   <div class="status">
     <div>Status: <span id="status">Loading...</span></div>
@@ -243,7 +243,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
       try {
         status.textContent = 'Connecting to proxy...';
         
-        // Connect to worker WebSocket proxy (wss:// for production, ws:// for local)
+        // Connect to worker WebSocket proxy
         const wsUrl = location.protocol.replace('http', 'ws') + '//' + location.host + '/deepgram-ws';
         ws = new WebSocket(wsUrl);
         
@@ -355,8 +355,8 @@ export default {
       // Accept client connection
       server.accept();
       
-      // Connect to Deepgram with API key via subprotocol header
-      const deepgramUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true';
+      // Connect to Deepgram - NO ENCODING PARAM for containerized WebM audio
+      const deepgramUrl = 'wss://api.deepgram.com/v1/listen?smart_format=true&interim_results=true';
       const deepgram = new WebSocket(deepgramUrl, ['token', env.DEEPGRAM_API_KEY]);
       
       // Forward audio from client to Deepgram
@@ -425,11 +425,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v110.0-WS-PROXY',
+        version: 'v110.1-WS-FIX',
         gospel: '444',
         reality: 'C',
         benchmarks: {
-          b0: env.DEEPGRAM_API_KEY ? 'v110.0-WS-PROXY-LIVE' : 'missing-key',
+          b0: env.DEEPGRAM_API_KEY ? 'v110.1-WS-WORKING' : 'missing-key',
           b1: 'operational',
           b2: 'pending', b3: 'pending', b4: 'pending'
         },
@@ -591,7 +591,7 @@ You are live. Be helpful, not theatrical.`;
       }
     }
     
-    return new Response('Phoenix OB1 System v110.0-WS-PROXY - /test-voice.html for B0, /magic-chat for B1', { 
+    return new Response('Phoenix OB1 System v110.1-WS-FIX - /test-voice.html for B0, /magic-chat for B1', { 
       status: 404,
       headers: { 'Access-Control-Allow-Origin': '*' }
     });
