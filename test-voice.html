@@ -38,41 +38,6 @@
       font-size: 0.9rem;
     }
 
-    .config {
-      background: rgba(168, 85, 247, 0.1);
-      border: 1px solid #a855f7;
-      border-radius: 8px;
-      padding: 1rem;
-      margin-bottom: 1.5rem;
-      width: 100%;
-      max-width: 600px;
-    }
-
-    .config label {
-      display: block;
-      margin-bottom: 0.5rem;
-      color: #f59e0b;
-      font-size: 0.85rem;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-    }
-
-    .config input {
-      width: 100%;
-      background: rgba(15, 15, 26, 0.8);
-      border: 1px solid #a855f7;
-      border-radius: 4px;
-      padding: 0.75rem;
-      color: #a855f7;
-      font-family: inherit;
-      font-size: 0.9rem;
-    }
-
-    .config input:focus {
-      outline: none;
-      border-color: #f59e0b;
-    }
-
     .status {
       background: rgba(168, 85, 247, 0.1);
       border: 1px solid #a855f7;
@@ -118,7 +83,7 @@
       transition: all 0.2s;
     }
 
-    button:hover {
+    button:hover:not(:disabled) {
       background: #f59e0b;
       transform: translateY(-2px);
     }
@@ -204,15 +169,14 @@
 <body>
   <div class="header">
     <h1>B0 VOICE TEST</h1>
-    <p>Phoenix OB1 System • Direct Deepgram Connection</p>
-  </div>
-
-  <div class="config">
-    <label for="deepgram-key">Deepgram API Key (get from Cloudflare Worker env)</label>
-    <input type="password" id="deepgram-key" placeholder="Paste your Deepgram API key here">
+    <p>Phoenix OB1 System • Voice to Obi</p>
   </div>
 
   <div class="status">
+    <div class="status-item">
+      <span>Config:</span>
+      <span class="status-value" id="config-status">Loading Deepgram key...</span>
+    </div>
     <div class="status-item">
       <span>Deepgram:</span>
       <span class="status-value" id="dg-status">Not connected</span>
@@ -230,7 +194,7 @@
   <div id="error-box" class="error hidden"></div>
 
   <div class="controls">
-    <button id="start-btn">Start Recording</button>
+    <button id="start-btn" disabled>Start Recording</button>
     <button id="stop-btn" disabled>Stop Recording</button>
   </div>
 
@@ -248,17 +212,18 @@
 
   <div class="footer">
     Gospel 444 • Reality-C • Agent 99<br>
-    Architecture: Browser → Deepgram (B0) → Worker /chat (B1)
+    Browser → Deepgram (B0) → Worker /chat (B1)
   </div>
 
   <script>
     const workerUrl = window.location.origin;
 
+    let deepgramApiKey = null;
     let deepgramWs = null;
     let mediaRecorder = null;
     let audioStream = null;
 
-    const keyInput = document.getElementById('deepgram-key');
+    const configStatus = document.getElementById('config-status');
     const startBtn = document.getElementById('start-btn');
     const stopBtn = document.getElementById('stop-btn');
     const dgStatus = document.getElementById('dg-status');
@@ -277,12 +242,31 @@
       errorBox.classList.add('hidden');
     }
 
+    // Auto-fetch Deepgram API key from worker
+    async function loadConfig() {
+      try {
+        const response = await fetch(`${workerUrl}/deepgram-key`);
+        if (!response.ok) {
+          throw new Error('Failed to fetch Deepgram key');
+        }
+        const data = await response.json();
+        deepgramApiKey = data.key;
+        configStatus.textContent = 'Ready';
+        configStatus.style.color = '#10b981';
+        startBtn.disabled = false;
+      } catch (err) {
+        configStatus.textContent = 'Error';
+        configStatus.style.color = '#ef4444';
+        showError('Failed to load Deepgram configuration from worker');
+        console.error('Config load error:', err);
+      }
+    }
+
     async function startRecording() {
       hideError();
 
-      const apiKey = keyInput.value.trim();
-      if (!apiKey) {
-        showError('Please enter your Deepgram API key');
+      if (!deepgramApiKey) {
+        showError('Deepgram API key not loaded');
         return;
       }
 
@@ -294,7 +278,7 @@
 
         // Connect directly to Deepgram
         const deepgramUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true`;
-        deepgramWs = new WebSocket(deepgramUrl, ['token', apiKey]);
+        deepgramWs = new WebSocket(deepgramUrl, ['token', deepgramApiKey]);
 
         deepgramWs.onopen = () => {
           dgStatus.textContent = 'Connected';
@@ -351,7 +335,7 @@
 
         deepgramWs.onerror = (error) => {
           console.error('Deepgram error:', error);
-          showError('Deepgram connection failed - check API key');
+          showError('Deepgram connection failed');
           dgStatus.textContent = 'Error';
           dgStatus.style.color = '#ef4444';
         };
@@ -414,16 +398,8 @@
     startBtn.addEventListener('click', startRecording);
     stopBtn.addEventListener('click', stopRecording);
 
-    // Load API key from localStorage if available
-    const savedKey = localStorage.getItem('deepgram_api_key');
-    if (savedKey) {
-      keyInput.value = savedKey;
-    }
-
-    // Save API key to localStorage
-    keyInput.addEventListener('change', () => {
-      localStorage.setItem('deepgram_api_key', keyInput.value);
-    });
+    // Load config on page load
+    loadConfig();
   </script>
 </body>
 </html>
