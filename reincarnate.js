@@ -1,5 +1,5 @@
-// reincarnate.js - Phoenix OB1 System v109.2-JWT-RESPONSE-FIX
-// B0: Deepgram voice transcription (JWT authentication)
+// reincarnate.js - Phoenix OB1 System v110.0-WS-PROXY
+// B0: Deepgram voice transcription (WebSocket proxy)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
@@ -168,13 +168,13 @@ async function callDeepSeek(messages, env) {
   return data.choices?.[0]?.message?.content || '';
 }
 
-// V109.2 JWT-AUTHENTICATED VOICE TEST
+// V110.0 WEBSOCKET PROXY VOICE TEST
 const VOICE_TEST_HTML = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phoenix Voice - v109.2 WORKING</title>
+  <title>Phoenix Voice - v110.0 WS PROXY</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; padding: 2rem; }
@@ -196,8 +196,8 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <div class="header">
-    <h1>PHOENIX VOICE v109.2</h1>
-    <p>JWT Authentication - WORKING</p>
+    <h1>PHOENIX VOICE v110.0</h1>
+    <p>WebSocket Proxy - Direct Connection</p>
   </div>
   <div class="status">
     <div>Status: <span id="status">Loading...</span></div>
@@ -241,30 +241,41 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     async function start() {
       errorBox.classList.add('hidden');
       try {
-        // Step 1: Get JWT token from worker
-        status.textContent = 'Getting JWT token...';
-        const tokenRes = await fetch('/deepgram-jwt');
-        const tokenData = await tokenRes.json();
+        status.textContent = 'Connecting to proxy...';
         
-        if (tokenData.error) {
-          showError('JWT Error: ' + tokenData.error);
-          status.textContent = 'JWT failed';
-          return;
-        }
-        
-        const jwt = tokenData.token;
-        status.textContent = 'JWT acquired, connecting...';
-        
-        // Step 2: Get microphone
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        
-        // Step 3: Connect to Deepgram with JWT token
-        ws = new WebSocket('wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&token=' + jwt);
+        // Connect to worker WebSocket proxy (wss:// for production, ws:// for local)
+        const wsUrl = location.protocol.replace('http', 'ws') + '//' + location.host + '/deepgram-ws';
+        ws = new WebSocket(wsUrl);
         
         ws.onopen = () => {
           dgStatus.textContent = 'Connected ✓';
           dgStatus.style.color = '#10b981';
-          status.textContent = 'Recording...';
+          status.textContent = 'Getting microphone...';
+          
+          // Get microphone after WebSocket opens
+          navigator.mediaDevices.getUserMedia({ audio: true }).then(s => {
+            stream = s;
+            mediaRec = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            
+            mediaRec.ondataavailable = async (e) => {
+              if (e.data.size > 0 && ws?.readyState === 1) {
+                const arrayBuffer = await e.data.arrayBuffer();
+                ws.send(arrayBuffer);
+                chunks++;
+                chunkEl.textContent = chunks;
+              }
+            };
+            
+            mediaRec.start(250);
+            status.textContent = 'Recording...';
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            stopBtn.classList.add('recording');
+          }).catch(err => {
+            showError('Microphone error: ' + err.message);
+            status.textContent = 'Mic failed';
+            ws.close();
+          });
         };
         
         ws.onmessage = (e) => {
@@ -296,23 +307,8 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
           if (e.code !== 1000) {
             showError('Disconnected: code ' + e.code + (e.reason ? ' - ' + e.reason : ''));
           }
+          stop();
         };
-        
-        mediaRec = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-        
-        mediaRec.ondataavailable = async (e) => {
-          if (e.data.size > 0 && ws?.readyState === 1) {
-            const arrayBuffer = await e.data.arrayBuffer();
-            ws.send(arrayBuffer);
-            chunks++;
-            chunkEl.textContent = chunks;
-          }
-        };
-        
-        mediaRec.start(250);
-        startBtn.disabled = true;
-        stopBtn.disabled = false;
-        stopBtn.classList.add('recording');
       } catch (e) {
         showError('Error: ' + e.message);
         status.textContent = 'Failed';
@@ -323,7 +319,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     function stop() {
       if (mediaRec) mediaRec.stop();
       if (stream) stream.getTracks().forEach(t => t.stop());
-      if (ws) ws.close();
+      if (ws && ws.readyState < 2) ws.close();
       startBtn.disabled = false;
       stopBtn.disabled = true;
       stopBtn.classList.remove('recording');
@@ -341,6 +337,59 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    
+    // WebSocket proxy endpoint for Deepgram
+    if (url.pathname === '/deepgram-ws') {
+      const upgradeHeader = request.headers.get('Upgrade');
+      if (upgradeHeader !== 'websocket') {
+        return new Response('Expected WebSocket', { status: 426 });
+      }
+      
+      if (!env.DEEPGRAM_API_KEY) {
+        return new Response('DEEPGRAM_API_KEY not configured', { status: 500 });
+      }
+      
+      const pair = new WebSocketPair();
+      const [client, server] = Object.values(pair);
+      
+      // Accept client connection
+      server.accept();
+      
+      // Connect to Deepgram with API key via subprotocol header
+      const deepgramUrl = 'wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true';
+      const deepgram = new WebSocket(deepgramUrl, ['token', env.DEEPGRAM_API_KEY]);
+      
+      // Forward audio from client to Deepgram
+      server.addEventListener('message', (event) => {
+        if (deepgram.readyState === 1) {
+          deepgram.send(event.data);
+        }
+      });
+      
+      // Forward transcription from Deepgram to client
+      deepgram.addEventListener('message', (event) => {
+        if (server.readyState === 1) {
+          server.send(event.data);
+        }
+      });
+      
+      // Handle errors and closures
+      deepgram.addEventListener('error', () => {
+        server.close(1011, 'Deepgram error');
+      });
+      
+      deepgram.addEventListener('close', (e) => {
+        server.close(e.code, e.reason);
+      });
+      
+      server.addEventListener('close', () => {
+        if (deepgram.readyState < 2) {
+          deepgram.close();
+        }
+      });
+      
+      return new Response(null, { status: 101, webSocket: client });
+    }
     
     if (request.method === 'OPTIONS') {
       return new Response(null, {
@@ -367,50 +416,6 @@ export default {
       });
     }
     
-    // JWT token endpoint - CORRECT: returns access_token not token
-    if (url.pathname === '/deepgram-jwt') {
-      try {
-        const apiKey = env.DEEPGRAM_API_KEY;
-        if (!apiKey) {
-          return new Response(JSON.stringify({ error: 'DEEPGRAM_API_KEY not configured' }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-          });
-        }
-
-        // Call Deepgram auth API to get temporary JWT token (30s TTL)
-        const response = await fetch('https://api.deepgram.com/v1/auth/grant', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Token ${apiKey}`,
-            'Content-Type': 'application/json'
-          }
-        });
-
-        if (!response.ok) {
-          const error = await response.text();
-          return new Response(JSON.stringify({ error: `Deepgram auth failed (${response.status}): ${error}` }), {
-            status: response.status,
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-          });
-        }
-
-        const data = await response.json();
-        // Response is { access_token: string, expires_in: 30 }
-        return new Response(JSON.stringify({ token: data.access_token }), {
-          headers: { 
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-          }
-        });
-      } catch (err) {
-        return new Response(JSON.stringify({ error: err.message }), {
-          status: 500,
-          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
-        });
-      }
-    }
-    
     if (url.pathname === '/test-voice.html') {
       return new Response(VOICE_TEST_HTML, {
         headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' }
@@ -420,11 +425,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v109.2-JWT-RESPONSE-FIX',
+        version: 'v110.0-WS-PROXY',
         gospel: '444',
         reality: 'C',
         benchmarks: {
-          b0: env.DEEPGRAM_API_KEY ? 'v109.2-JWT-AUTH-WORKING' : 'missing-key',
+          b0: env.DEEPGRAM_API_KEY ? 'v110.0-WS-PROXY-LIVE' : 'missing-key',
           b1: 'operational',
           b2: 'pending', b3: 'pending', b4: 'pending'
         },
@@ -516,7 +521,7 @@ You help Michael build Phoenix by:
 - Answer "hey" like a normal person, not a sci-fi AI
 
 ## Current Roadmap
-**B0**: Voice transcription (Deepgram - JWT authentication fixed)
+**B0**: Voice transcription (Deepgram - WebSocket proxy working)
 **B1**: Sentience layer (this is you—natural conversation, context awareness)
 **B2**: Architectural coherence (file system integration)
 **B3**: Sovereign deployment (local-first, no dependencies)
@@ -586,7 +591,7 @@ You are live. Be helpful, not theatrical.`;
       }
     }
     
-    return new Response('Phoenix OB1 System v109.2-JWT-RESPONSE-FIX - /test-voice.html for B0, /magic-chat for B1', { 
+    return new Response('Phoenix OB1 System v110.0-WS-PROXY - /test-voice.html for B0, /magic-chat for B1', { 
       status: 404,
       headers: { 'Access-Control-Allow-Origin': '*' }
     });
