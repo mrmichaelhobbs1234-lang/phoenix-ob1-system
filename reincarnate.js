@@ -252,7 +252,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
       try {
         audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         micStatus.textContent = 'Active'; micStatus.style.color = '#10b981';
-        const dgUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&token=${deepgramApiKey}`;
+        const dgUrl = "wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&token=" + deepgramApiKey;
         deepgramWs = new WebSocket(dgUrl);
         deepgramWs.onopen = () => { dgStatus.textContent = 'Connected'; dgStatus.style.color = '#10b981'; };
         deepgramWs.onmessage = async (e) => {
@@ -265,7 +265,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
                 obiStatus.textContent = 'Processing...'; obiStatus.style.color = '#f59e0b';
                 try {
                   const chatRes = await fetch(workerUrl + '/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-sovereign-key': prompt('Enter sovereign key:') || '' }, body: JSON.stringify({ message: txt, sessionId: 'voice-session' }) });
-                  if (chatRes.ok) { const d = await chatRes.json(); obiResponseEl.textContent = d.reply; obiStatus.textContent = `Ready (${d.aiUsed})`; obiStatus.style.color = '#10b981'; }
+                  if (chatRes.ok) { const d = await chatRes.json(); obiResponseEl.textContent = d.reply; obiStatus.textContent = 'Ready (' + d.aiUsed + ')'; obiStatus.style.color = '#10b981'; }
                   else { obiStatus.textContent = 'Error'; obiStatus.style.color = '#ef4444'; }
                 } catch { obiStatus.textContent = 'Error'; obiStatus.style.color = '#ef4444'; }
               }
@@ -273,7 +273,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
           } catch (err) { console.error('Parse error:', err); }
         };
         deepgramWs.onerror = () => { showError('Deepgram connection failed'); dgStatus.textContent = 'Error'; dgStatus.style.color = '#ef4444'; };
-        deepgramWs.onclose = (e) => { dgStatus.textContent = 'Disconnected'; dgStatus.style.color = '#a855f7'; if (e.code !== 1000) showError(`Disconnected: ${e.code}`); };
+        deepgramWs.onclose = (e) => { dgStatus.textContent = 'Disconnected'; dgStatus.style.color = '#a855f7'; if (e.code !== 1000) showError('Disconnected: ' + e.code); };
         mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
         mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0 && deepgramWs?.readyState === 1) deepgramWs.send(e.data); };
         mediaRecorder.start(250);
