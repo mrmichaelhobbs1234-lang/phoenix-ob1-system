@@ -9,21 +9,29 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    name: Deploy phoenix-ob1-system
+    name: Deploy Phoenix OB1 to Cloudflare
     steps:
-      - uses: actions/checkout@v4
-      
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-      
-      - name: Install dependencies
-        run: npm install
-      
+
+      - name: Install Wrangler
+        run: npm install -g wrangler
+
       - name: Deploy to Cloudflare Workers
         uses: cloudflare/wrangler-action@v3
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: deploy
+
+      - name: Deployment Summary
+        run: |
+          echo "✅ Phoenix OB1 System deployed successfully!"
+          echo "📦 Version: v1.6-AUTH-ENFORCED"
+          echo "🔗 Worker URL: https://phoenix-ob1-system.YOUR-SUBDOMAIN.workers.dev"
+          echo "🔐 Auth: ENFORCED (x-sovereign-key required)"
