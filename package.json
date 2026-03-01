@@ -1,0 +1,18 @@
+{
+  "name": "phoenix-ob1-system",
+  "version": "109.2.0",
+  "description": "OB(1) System - Unified Phoenix Protocol",
+  "main": "reincarnate.js",
+  "type": "module",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail"
+  },
+  "keywords": ["phoenix", "protocol", "cloudflare", "workers", "durable-objects"],
+  "author": "mrmichaelhobbs1234-lang",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}
