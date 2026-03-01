@@ -38,6 +38,41 @@
       font-size: 0.9rem;
     }
 
+    .config {
+      background: rgba(168, 85, 247, 0.1);
+      border: 1px solid #a855f7;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+      width: 100%;
+      max-width: 600px;
+    }
+
+    .config label {
+      display: block;
+      margin-bottom: 0.5rem;
+      color: #f59e0b;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .config input {
+      width: 100%;
+      background: rgba(15, 15, 26, 0.8);
+      border: 1px solid #a855f7;
+      border-radius: 4px;
+      padding: 0.75rem;
+      color: #a855f7;
+      font-family: inherit;
+      font-size: 0.9rem;
+    }
+
+    .config input:focus {
+      outline: none;
+      border-color: #f59e0b;
+    }
+
     .status {
       background: rgba(168, 85, 247, 0.1);
       border: 1px solid #a855f7;
@@ -169,21 +204,26 @@
 <body>
   <div class="header">
     <h1>B0 VOICE TEST</h1>
-    <p>Phoenix OB1 System • Deepgram WebSocket Transcription</p>
+    <p>Phoenix OB1 System • Direct Deepgram Connection</p>
+  </div>
+
+  <div class="config">
+    <label for="deepgram-key">Deepgram API Key (get from Cloudflare Worker env)</label>
+    <input type="password" id="deepgram-key" placeholder="Paste your Deepgram API key here">
   </div>
 
   <div class="status">
     <div class="status-item">
-      <span>Worker:</span>
-      <span class="status-value" id="worker-url">Loading...</span>
-    </div>
-    <div class="status-item">
-      <span>WebSocket:</span>
-      <span class="status-value" id="ws-status">Disconnected</span>
+      <span>Deepgram:</span>
+      <span class="status-value" id="dg-status">Not connected</span>
     </div>
     <div class="status-item">
       <span>Microphone:</span>
       <span class="status-value" id="mic-status">Not started</span>
+    </div>
+    <div class="status-item">
+      <span>Obi (B1):</span>
+      <span class="status-value" id="obi-status">Ready</span>
     </div>
   </div>
 
@@ -196,32 +236,34 @@
 
   <div class="transcripts">
     <div class="transcript-box">
-      <h3>Live Transcription</h3>
+      <h3>Live Transcription (Deepgram)</h3>
       <div id="transcript" class="transcript-text">Speak to see transcription...</div>
     </div>
 
     <div class="transcript-box obi-response">
-      <h3>Obi Response</h3>
+      <h3>Obi Response (B1)</h3>
       <div id="obi-response" class="transcript-text">Waiting for voice input...</div>
     </div>
   </div>
 
   <div class="footer">
-    Gospel 444 • Reality-C • Agent 99
+    Gospel 444 • Reality-C • Agent 99<br>
+    Architecture: Browser → Deepgram (B0) → Worker /chat (B1)
   </div>
 
   <script>
     const workerUrl = window.location.origin;
-    document.getElementById('worker-url').textContent = workerUrl;
 
-    let ws = null;
+    let deepgramWs = null;
     let mediaRecorder = null;
     let audioStream = null;
 
+    const keyInput = document.getElementById('deepgram-key');
     const startBtn = document.getElementById('start-btn');
     const stopBtn = document.getElementById('stop-btn');
-    const wsStatus = document.getElementById('ws-status');
+    const dgStatus = document.getElementById('dg-status');
     const micStatus = document.getElementById('mic-status');
+    const obiStatus = document.getElementById('obi-status');
     const transcriptEl = document.getElementById('transcript');
     const obiResponseEl = document.getElementById('obi-response');
     const errorBox = document.getElementById('error-box');
@@ -238,81 +280,107 @@
     async function startRecording() {
       hideError();
 
+      const apiKey = keyInput.value.trim();
+      if (!apiKey) {
+        showError('Please enter your Deepgram API key');
+        return;
+      }
+
       try {
         // Get microphone access
         audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         micStatus.textContent = 'Active';
         micStatus.style.color = '#10b981';
 
-        // Connect WebSocket
-        const wsUrl = workerUrl.replace('http', 'ws') + '/transcribe';
-        ws = new WebSocket(wsUrl);
+        // Connect directly to Deepgram
+        const deepgramUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true`;
+        deepgramWs = new WebSocket(deepgramUrl, ['token', apiKey]);
 
-        ws.onopen = () => {
-          wsStatus.textContent = 'Connected';
-          wsStatus.style.color = '#10b981';
-          console.log('WebSocket connected');
+        deepgramWs.onopen = () => {
+          dgStatus.textContent = 'Connected';
+          dgStatus.style.color = '#10b981';
+          console.log('Deepgram connected');
         };
 
-        ws.onmessage = (event) => {
+        deepgramWs.onmessage = async (event) => {
           try {
             const data = JSON.parse(event.data);
 
-            if (data.type === 'transcript') {
-              transcriptEl.textContent = data.text;
-              transcriptEl.className = data.isFinal ? 'transcript-text' : 'transcript-text interim';
-            }
+            if (data.channel?.alternatives?.[0]?.transcript) {
+              const transcript = data.channel.alternatives[0].transcript;
+              const isFinal = data.is_final || false;
 
-            if (data.type === 'obi-response') {
-              obiResponseEl.textContent = data.text;
-              obiResponseEl.style.opacity = '1';
-            }
+              transcriptEl.textContent = transcript;
+              transcriptEl.className = isFinal ? 'transcript-text' : 'transcript-text interim';
 
-            if (data.type === 'error') {
-              showError('Deepgram error: ' + data.message);
-            }
+              // If final, send to Obi (B1)
+              if (isFinal && transcript.trim().length > 0) {
+                obiStatus.textContent = 'Processing...';
+                obiStatus.style.color = '#f59e0b';
 
-            if (data.type === 'status') {
-              console.log('Status:', data.message);
+                try {
+                  const chatResponse = await fetch(`${workerUrl}/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      message: transcript,
+                      sessionId: 'voice-session'
+                    })
+                  });
+
+                  if (chatResponse.ok) {
+                    const chatData = await chatResponse.json();
+                    obiResponseEl.textContent = chatData.reply;
+                    obiStatus.textContent = `Ready (${chatData.aiUsed})`;
+                    obiStatus.style.color = '#10b981';
+                  } else {
+                    obiStatus.textContent = 'Error';
+                    obiStatus.style.color = '#ef4444';
+                  }
+                } catch (err) {
+                  console.error('Obi error:', err);
+                  obiStatus.textContent = 'Error';
+                  obiStatus.style.color = '#ef4444';
+                }
+              }
             }
           } catch (err) {
             console.error('Message parse error:', err);
           }
         };
 
-        ws.onerror = (error) => {
-          console.error('WebSocket error:', error);
-          showError('WebSocket connection failed');
-          wsStatus.textContent = 'Error';
-          wsStatus.style.color = '#ef4444';
+        deepgramWs.onerror = (error) => {
+          console.error('Deepgram error:', error);
+          showError('Deepgram connection failed - check API key');
+          dgStatus.textContent = 'Error';
+          dgStatus.style.color = '#ef4444';
         };
 
-        ws.onclose = () => {
-          wsStatus.textContent = 'Disconnected';
-          wsStatus.style.color = '#a855f7';
-          console.log('WebSocket closed');
+        deepgramWs.onclose = () => {
+          dgStatus.textContent = 'Disconnected';
+          dgStatus.style.color = '#a855f7';
+          console.log('Deepgram closed');
         };
 
-        // Setup MediaRecorder to send audio chunks
+        // Setup MediaRecorder
         mediaRecorder = new MediaRecorder(audioStream, {
           mimeType: 'audio/webm'
         });
 
         mediaRecorder.ondataavailable = (event) => {
-          if (event.data.size > 0 && ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(event.data);
+          if (event.data.size > 0 && deepgramWs && deepgramWs.readyState === WebSocket.OPEN) {
+            deepgramWs.send(event.data);
           }
         };
 
-        mediaRecorder.start(250); // Send chunks every 250ms
+        mediaRecorder.start(250);
 
         startBtn.disabled = true;
         stopBtn.disabled = false;
-        startBtn.classList.remove('recording');
         stopBtn.classList.add('recording');
 
       } catch (err) {
-        showError('Microphone access denied or not available: ' + err.message);
+        showError('Microphone access denied: ' + err.message);
         micStatus.textContent = 'Error';
         micStatus.style.color = '#ef4444';
       }
@@ -328,24 +396,34 @@
         audioStream = null;
       }
 
-      if (ws) {
-        ws.close();
-        ws = null;
+      if (deepgramWs) {
+        deepgramWs.close();
+        deepgramWs = null;
       }
 
       micStatus.textContent = 'Stopped';
       micStatus.style.color = '#a855f7';
-      wsStatus.textContent = 'Disconnected';
-      wsStatus.style.color = '#a855f7';
+      dgStatus.textContent = 'Disconnected';
+      dgStatus.style.color = '#a855f7';
 
       startBtn.disabled = false;
       stopBtn.disabled = true;
-      startBtn.classList.remove('recording');
       stopBtn.classList.remove('recording');
     }
 
     startBtn.addEventListener('click', startRecording);
     stopBtn.addEventListener('click', stopRecording);
+
+    // Load API key from localStorage if available
+    const savedKey = localStorage.getItem('deepgram_api_key');
+    if (savedKey) {
+      keyInput.value = savedKey;
+    }
+
+    // Save API key to localStorage
+    keyInput.addEventListener('change', () => {
+      localStorage.setItem('deepgram_api_key', keyInput.value);
+    });
   </script>
 </body>
 </html>
