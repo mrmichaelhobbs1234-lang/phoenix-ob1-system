@@ -4,25 +4,9 @@ compatibility_date = "2024-04-01"
 compatibility_flags = ["nodejs_compat"]
 
 [[durable_objects.bindings]]
-name = "LEDGER"
-class_name = "LedgerDO"
-
-[[durable_objects.bindings]]
 name = "SESSIONS"
 class_name = "SessionDO"
 
-[[durable_objects.bindings]]
-name = "RATELIMITER"
-class_name = "RateLimiterDO"
-
-[[durable_objects.bindings]]
-name = "MEMORY"
-class_name = "MemoryDO"
-
 [[migrations]]
 tag = "v1-genesis"
-new_sqlite_classes = ["LedgerDO","SessionDO","RateLimiterDO","MemoryDO"]
-
-[observability]
-enabled = true
-head_sampling_rate = 1
+new_sqlite_classes = ["SessionDO"]
