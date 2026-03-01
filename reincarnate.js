@@ -1,5 +1,5 @@
-// reincarnate.js - Phoenix OB1 System v111-COMPLETE-FIX
-// B0: Deepgram voice transcription (binary frames + validation + UI logs)
+// reincarnate.js - Phoenix OB1 System v112-PRODUCTION
+// B0: Deepgram voice transcription (PRODUCTION READY)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
@@ -173,7 +173,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phoenix Voice - COMPLETE FIX</title>
+  <title>Phoenix Voice - PRODUCTION</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; padding: 2rem; }
@@ -197,12 +197,12 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 <body>
   <div class="header">
     <h1>PHOENIX VOICE B0</h1>
-    <p>Complete Fix - Binary + Validation + Logs</p>
+    <p>PRODUCTION READY</p>
   </div>
   <div class="status">
     <div>Status: <span id="status">Loading...</span></div>
     <div>Deepgram: <span id="dg-status">Not connected</span></div>
-    <div>Chunks: <span id="chunks">0</span></div>
+    <div>Chunks: <span id="chunks">0</span> | Transcripts: <span id="transcripts">0</span></div>
   </div>
   <div id="error" class="box error hidden"></div>
   <div>
@@ -218,10 +218,11 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     <div id="logs" class="logs">Logs will appear here...</div>
   </div>
   <script>
-    let ws = null, mediaRec = null, stream = null, chunks = 0;
+    let ws = null, mediaRec = null, stream = null, chunks = 0, transcriptCount = 0;
     const status = document.getElementById('status');
     const dgStatus = document.getElementById('dg-status');
     const chunkEl = document.getElementById('chunks');
+    const transcriptEl = document.getElementById('transcripts');
     const startBtn = document.getElementById('start');
     const stopBtn = document.getElementById('stop');
     const transcript = document.getElementById('transcript');
@@ -246,7 +247,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
       try {
         status.textContent = 'Ready';
         startBtn.disabled = false;
-        addLog('Initialized');
+        addLog('B0 initialized - PRODUCTION');
       } catch (e) {
         status.textContent = 'Error: ' + e.message;
         showError('Failed to initialize');
@@ -256,7 +257,9 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     async function start() {
       errorBox.classList.add('hidden');
       chunks = 0;
+      transcriptCount = 0;
       chunkEl.textContent = '0';
+      transcriptEl.textContent = '0';
       transcript.textContent = '';
       logsDiv.innerHTML = '';
       
@@ -270,17 +273,16 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
           dgStatus.textContent = 'Connected ✓';
           dgStatus.style.color = '#10b981';
           status.textContent = 'Getting microphone...';
-          addLog('WS connected to Worker');
+          addLog('WS connected');
           
           navigator.mediaDevices.getUserMedia({ audio: true }).then(s => {
             stream = s;
             addLog('Microphone accessed');
             
-            // Force WebM/Opus
             const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
               ? 'audio/webm;codecs=opus'
               : 'audio/webm';
-            addLog('Using mimeType: ' + mimeType);
+            addLog('Format: ' + mimeType);
             
             mediaRec = new MediaRecorder(stream, { mimeType });
             
@@ -288,12 +290,14 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
               if (!e.data || e.data.size === 0) return;
               if (!ws || ws.readyState !== WebSocket.OPEN) return;
               
-              // CRITICAL: send binary bytes, not Blob
               const ab = await e.data.arrayBuffer();
               ws.send(ab);
               chunks++;
               chunkEl.textContent = chunks;
-              if (chunks === 1) addLog('First audio chunk sent (ArrayBuffer, ' + ab.byteLength + ' bytes)');
+              // Log only first chunk and every 20th chunk
+              if (chunks === 1 || chunks % 20 === 0) {
+                addLog('Chunk #' + chunks + ' sent (' + ab.byteLength + ' bytes)');
+              }
             };
             
             mediaRec.start(250);
@@ -301,7 +305,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
             startBtn.disabled = true;
             stopBtn.disabled = false;
             stopBtn.classList.add('recording');
-            addLog('MediaRecorder started (250ms chunks)');
+            addLog('Recording started (250ms chunks)');
           }).catch(err => {
             showError('Microphone error: ' + err.message);
             status.textContent = 'Mic failed';
@@ -313,19 +317,29 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
           try {
             const data = JSON.parse(e.data);
             
-            // Debug logs from Worker
             if (data.__debug) {
-              addLog('Worker: ' + data.msg + ' ' + JSON.stringify(data.obj || ''));
+              // Rate-limit client_frame logs (only first + every 20th)
+              if (data.msg === 'client_frame') {
+                const bytes = data.obj?.bytes || 0;
+                if (chunks === 1 || chunks % 20 === 0) {
+                  addLog('Worker: frame #' + chunks + ' (' + bytes + ' bytes)');
+                }
+              } else {
+                addLog('Worker: ' + data.msg + ' ' + JSON.stringify(data.obj || ''));
+              }
               return;
             }
             
-            // Deepgram transcript
             if (data.channel?.alternatives?.[0]?.transcript) {
               const txt = data.channel.alternatives[0].transcript;
               const isFinal = data.is_final || false;
               if (txt) {
                 transcript.textContent = txt;
-                if (isFinal) addLog('Final: ' + txt);
+                if (isFinal) {
+                  transcriptCount++;
+                  transcriptEl.textContent = transcriptCount;
+                  addLog('Transcript #' + transcriptCount + ': ' + txt);
+                }
               }
             }
           } catch (err) {
@@ -354,16 +368,27 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
       }
     }
     
-    function stop() {
+    async function stop() {
+      addLog('Stopping... (flushing final transcript)');
+      
+      // Send CloseStream to flush final transcript
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'CloseStream' }));
+      }
+      
+      // Wait 300ms for final transcript
+      await new Promise(resolve => setTimeout(resolve, 300));
+      
       if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
       if (stream) stream.getTracks().forEach(t => t.stop());
       if (ws && ws.readyState < 2) ws.close();
+      
       startBtn.disabled = false;
       stopBtn.disabled = true;
       stopBtn.classList.remove('recording');
       status.textContent = 'Stopped';
       dgStatus.textContent = 'Disconnected';
-      addLog('Stopped');
+      addLog('Stopped (chunks: ' + chunks + ', transcripts: ' + transcriptCount + ')');
     }
     
     startBtn.onclick = start;
@@ -395,6 +420,7 @@ export default {
       let dgWs = null;
       let keepAliveTimer = null;
       let hasForwardedAudio = false;
+      let frameCount = 0;
       const pending = [];
       const MAX_PENDING = 32;
       
@@ -439,17 +465,14 @@ export default {
             try {
               if (dgWs && dgWs.readyState === 1) {
                 dgWs.send(JSON.stringify({ type: 'KeepAlive' }));
-                uiLog('dg_keepalive', { ok: true });
               }
-            } catch (e) {
-              uiLog('dg_keepalive', { ok: false, err: String(e?.message || e) });
-            }
+            } catch {}
           }, 5000);
           
           // Warn if no audio within 10s
           setTimeout(() => {
             if (!hasForwardedAudio && server.readyState === 1) {
-              uiLog('fatal', { reason: 'No audio forwarded to Deepgram within 10s. Check browser send is ArrayBuffer.' });
+              uiLog('fatal', { reason: 'No audio forwarded to Deepgram within 10s' });
             }
           }, 10000);
           
@@ -492,23 +515,34 @@ export default {
       
       server.addEventListener('message', (event) => {
         const data = event.data;
+        frameCount++;
         
-        // Debug frame type to UI
-        const kind = (typeof data === 'string') ? 'string'
-          : (data instanceof ArrayBuffer) ? 'arraybuffer'
-          : (data && data.buffer instanceof ArrayBuffer) ? (data.constructor?.name || 'typedarray')
-          : typeof data;
+        // Rate-limit client_frame logs (first + every 20th)
+        if (frameCount === 1 || frameCount % 20 === 0) {
+          const kind = (typeof data === 'string') ? 'string'
+            : (data instanceof ArrayBuffer) ? 'arraybuffer'
+            : (data && data.buffer instanceof ArrayBuffer) ? (data.constructor?.name || 'typedarray')
+            : typeof data;
+          uiLog('client_frame', { kind, bytes: typeof data === 'string' ? data.length : (data.byteLength || null) });
+        }
         
-        uiLog('client_frame', { kind, bytes: typeof data === 'string' ? data.length : (data.byteLength || null) });
+        // Handle CloseStream from browser
+        if (typeof data === 'string') {
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.type === 'CloseStream' && dgWs && dgWs.readyState === 1) {
+              dgWs.send(data);
+              return;
+            }
+          } catch {}
+        }
         
-        // HARD RULE: Deepgram audio must be binary
         if (!isBinary(data)) {
-          uiLog('reject_nonbinary', { kind });
-          server.close(1003, 'Non-binary frame from browser (send ArrayBuffer, not Blob)');
+          uiLog('reject_nonbinary', { kind: typeof data });
+          server.close(1003, 'Non-binary frame');
           return;
         }
         
-        // Convert TypedArray -> ArrayBuffer slice if needed
         const payload = (data instanceof ArrayBuffer)
           ? data
           : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
@@ -574,11 +608,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v111-COMPLETE-FIX',
+        version: 'v112-PRODUCTION',
         gospel: '444',
         reality: 'C',
         benchmarks: {
-          b0: 'COMPLETE - Binary frames + validation + UI logs',
+          b0: 'PRODUCTION - Rate-limited logs + CloseStream flush + transcript counter',
           b1: 'operational',
           b2: 'pending', b3: 'pending', b4: 'pending'
         },
@@ -670,7 +704,7 @@ You help Michael build Phoenix by:
 - Answer "hey" like a normal person, not a sci-fi AI
 
 ## Current Roadmap
-**B0**: Voice transcription (Deepgram - COMPLETE FIX deployed)
+**B0**: Voice transcription (Deepgram - PRODUCTION READY)
 **B1**: Sentience layer (this is you - natural conversation, context awareness)
 **B2**: Architectural coherence (file system integration)
 **B3**: Sovereign deployment (local-first, no dependencies)
@@ -740,7 +774,7 @@ You are live. Be helpful, not theatrical.`;
       }
     }
     
-    return new Response('Phoenix OB1 System v111-COMPLETE-FIX - /test-voice.html for B0, /magic-chat for B1', { 
+    return new Response('Phoenix OB1 System v112-PRODUCTION - /test-voice.html for B0, /magic-chat for B1', { 
       status: 404,
       headers: { 'Access-Control-Allow-Origin': '*' }
     });
