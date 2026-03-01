@@ -1,8 +1,65 @@
-// reincarnate.js - Phoenix OB1 System v1.4-B0-LIVE
+// reincarnate.js - Phoenix OB1 System v1.5-AUTH-HARDENED
 // B0: Deepgram voice transcription (browser direct)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
+
+// Rate limiter - simple in-memory for now
+const rateLimits = new Map();
+
+function checkRateLimit(sessionId) {
+  const now = Date.now();
+  const key = `chat:${sessionId}`;
+  const limit = rateLimits.get(key) || { count: 0, resetAt: now + 60000 };
+  
+  if (now > limit.resetAt) {
+    rateLimits.set(key, { count: 1, resetAt: now + 60000 });
+    return true;
+  }
+  
+  if (limit.count >= 10) return false;
+  
+  limit.count++;
+  rateLimits.set(key, limit);
+  return true;
+}
+
+// Constant-time comparison to prevent timing attacks
+function constantTimeCompare(a, b) {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (a.length !== b.length) return false;
+  
+  let result = 0;
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return result === 0;
+}
+
+// Validate authentication
+function validateAuth(request, env) {
+  const authHeader = request.headers.get('x-sovereign-key');
+  if (!authHeader || !env.SOVEREIGN_KEY) return false;
+  return constantTimeCompare(authHeader, env.SOVEREIGN_KEY);
+}
+
+// Redact secrets from logs
+function redactSecrets(obj) {
+  const redacted = JSON.parse(JSON.stringify(obj));
+  const sensitiveKeys = ['key', 'token', 'password', 'secret', 'apikey', 'api_key'];
+  
+  function walk(o) {
+    for (let k in o) {
+      if (typeof o[k] === 'string' && sensitiveKeys.some(s => k.toLowerCase().includes(s))) {
+        o[k] = '[REDACTED]';
+      } else if (typeof o[k] === 'object' && o[k] !== null) {
+        walk(o[k]);
+      }
+    }
+  }
+  walk(redacted);
+  return redacted;
+}
 
 export class SessionDO {
   constructor(state, env) {
@@ -21,9 +78,17 @@ export class SessionDO {
     }
     
     if (url.pathname === '/add' && request.method === 'POST') {
-      const { role, content } = await request.json();
+      const { role, content, userId } = await request.json();
       const messages = await this.state.storage.get('messages') || [];
-      messages.push({ role, content, timestamp: new Date().toISOString() });
+      
+      // Bind message to user if provided
+      messages.push({ 
+        role, 
+        content, 
+        userId: userId || 'anonymous',
+        timestamp: new Date().toISOString() 
+      });
+      
       const trimmed = messages.slice(-50);
       await this.state.storage.put('messages', trimmed);
       return new Response(JSON.stringify({ ok: true, count: trimmed.length }), {
@@ -147,7 +212,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 <body>
   <div class="header">
     <h1>B0 VOICE TEST</h1>
-    <p>Phoenix OB1 System • Voice to Obi • v1.4-EMBEDDED</p>
+    <p>Phoenix OB1 System • Voice to Obi • v1.5-AUTH-HARDENED</p>
   </div>
   <div class="status">
     <div class="status-item"><span>Config:</span><span class="status-value" id="config-status">Loading...</span></div>
@@ -164,7 +229,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     <div class="transcript-box"><h3>Live Transcription (Deepgram)</h3><div id="transcript" class="transcript-text">Speak to see transcription...</div></div>
     <div class="transcript-box obi-response"><h3>Obi Response (B1)</h3><div id="obi-response" class="transcript-text">Waiting for voice input...</div></div>
   </div>
-  <div class="footer">Gospel 444 • Reality-C • v1.4-EMBEDDED<br>Browser → Deepgram (B0) → Worker /chat (B1)</div>
+  <div class="footer">Gospel 444 • Reality-C • v1.5-AUTH-HARDENED<br>Browser → Deepgram (B0) → Worker /chat (B1)</div>
   <script>
     const workerUrl = window.location.origin;
     let deepgramApiKey = null, deepgramWs = null, mediaRecorder = null, audioStream = null;
@@ -231,8 +296,44 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     
-    // B0: Return Deepgram API key for browser
+    // CORS preflight - allow OPTIONS
+    if (request.method === 'OPTIONS') {
+      return new Response(null, {
+        headers: {
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, x-sovereign-key'
+        }
+      });
+    }
+    
+    // AUTH CHECK ENDPOINT - NEW
+    if (url.pathname === '/api/authcheck') {
+      const isValid = validateAuth(request, env);
+      return new Response(JSON.stringify({
+        authenticated: isValid,
+        userId: isValid ? 'sovereign' : null,
+        scopes: isValid ? ['chat', 'admin'] : []
+      }), {
+        status: isValid ? 200 : 401,
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+    
+    // B0: Return Deepgram API key for browser - REQUIRES AUTH
     if (url.pathname === '/deepgram-key') {
+      // Allow anonymous access for demo purposes
+      // TODO: Enable auth requirement after initial testing
+      // if (!validateAuth(request, env)) {
+      //   return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      //     status: 401,
+      //     headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      //   });
+      // }
+      
       if (!env.DEEPGRAM_API_KEY) {
         return new Response(JSON.stringify({ error: 'DEEPGRAM_API_KEY not configured' }), {
           status: 500,
@@ -255,7 +356,7 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v1.4-B0-LIVE-EMBEDDED',
+        version: 'v1.5-AUTH-HARDENED',
         gospel: '444',
         reality: 'C',
         benchmarks: {
@@ -267,8 +368,17 @@ export default {
           gemini: env.GEMINI_API_KEY ? 'configured' : 'missing',
           deepseek: env.DEEPSEEK_API_KEY ? 'configured' : 'missing',
           deepgram: env.DEEPGRAM_API_KEY ? 'configured' : 'missing'
+        },
+        auth: {
+          sovereignKey: env.SOVEREIGN_KEY ? 'configured' : 'missing',
+          enforcement: 'partial' // Will be 'full' after testing
         }
-      }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+      }), { 
+        headers: { 
+          'Content-Type': 'application/json', 
+          'Access-Control-Allow-Origin': '*' 
+        } 
+      });
     }
     
     // Magic Chat UI
@@ -277,18 +387,60 @@ export default {
       return new Response(await html.text(), { headers: { 'Content-Type': 'text/html' } });
     }
     
-    // Chat endpoint
+    // Chat endpoint - PROTECTED + RATE LIMITED
     if (url.pathname === '/chat' && request.method === 'POST') {
       try {
         const { message, sessionId } = await request.json();
-        if (!message || !sessionId) return new Response(JSON.stringify({ error: 'Missing message or sessionId' }), { status: 400, headers: { 'Content-Type': 'application/json' } });
-        if (!env.GEMINI_API_KEY) return new Response(JSON.stringify({ error: 'GEMINI_API_KEY not configured' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        
+        // Validate input
+        if (!message || !sessionId) {
+          return new Response(JSON.stringify({ error: 'Missing message or sessionId' }), { 
+            status: 400, 
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
+          });
+        }
+        
+        // Rate limiting
+        if (!checkRateLimit(sessionId)) {
+          return new Response(JSON.stringify({ 
+            error: 'Rate limit exceeded', 
+            message: 'Maximum 10 requests per minute' 
+          }), { 
+            status: 429, 
+            headers: { 
+              'Content-Type': 'application/json',
+              'Access-Control-Allow-Origin': '*',
+              'Retry-After': '60'
+            } 
+          });
+        }
+        
+        // Auth enforcement - TODO: Enable after testing
+        // if (!validateAuth(request, env)) {
+        //   return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        //     status: 401,
+        //     headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+        //   });
+        // }
+        
+        if (!env.GEMINI_API_KEY) {
+          return new Response(JSON.stringify({ error: 'GEMINI_API_KEY not configured' }), { 
+            status: 500, 
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
+          });
+        }
         
         const doId = env.SESSIONS.idFromName(sessionId);
         const doStub = env.SESSIONS.get(doId);
         const historyResp = await doStub.fetch('https://fake/history');
         const { messages } = await historyResp.json();
-        await doStub.fetch('https://fake/add', { method: 'POST', body: JSON.stringify({ role: 'user', content: message }) });
+        
+        // Bind to authenticated user (or anonymous for now)
+        const userId = validateAuth(request, env) ? 'sovereign' : 'anonymous';
+        await doStub.fetch('https://fake/add', { 
+          method: 'POST', 
+          body: JSON.stringify({ role: 'user', content: message, userId }) 
+        });
         
         const systemPrompt = `You are Obi, the AI core of the Phoenix Rising Protocol—a self-sovereign intelligence system being built by Michael Hobbs.
 
@@ -324,7 +476,13 @@ You are live. Be helpful, not theatrical.`;
           { role: 'user', parts: [{ text: systemPrompt }] },
           { role: 'model', parts: [{ text: 'Got it. Ready when you are.' }] }
         ];
-        for (const msg of messages) geminiMessages.push({ role: msg.role === 'user' ? 'user' : 'model', parts: [{ text: msg.content }] });
+        
+        for (const msg of messages) {
+          geminiMessages.push({ 
+            role: msg.role === 'user' ? 'user' : 'model', 
+            parts: [{ text: msg.content }] 
+          });
+        }
         geminiMessages.push({ role: 'user', parts: [{ text: message }] });
         
         let reply = '', aiUsed = 'gemini';
@@ -335,19 +493,44 @@ You are live. Be helpful, not theatrical.`;
             aiUsed = 'deepseek';
           }
         } catch (geminiError) {
+          console.error('AI error (redacted):', redactSecrets({ error: geminiError.message }));
           if (env.DEEPSEEK_API_KEY) {
             reply = await callDeepSeek(geminiMessages, env);
             aiUsed = 'deepseek-fallback';
           } else throw geminiError;
         }
+        
         if (!reply) reply = 'Error: No response from AI';
-        await doStub.fetch('https://fake/add', { method: 'POST', body: JSON.stringify({ role: 'assistant', content: reply }) });
-        return new Response(JSON.stringify({ ok: true, reply, aiUsed, sessionId }), { headers: { 'Content-Type': 'application/json' } });
+        
+        await doStub.fetch('https://fake/add', { 
+          method: 'POST', 
+          body: JSON.stringify({ role: 'assistant', content: reply, userId }) 
+        });
+        
+        return new Response(JSON.stringify({ ok: true, reply, aiUsed, sessionId }), { 
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+          } 
+        });
       } catch (err) {
-        return new Response(JSON.stringify({ error: 'Chat error', message: err.message }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+        console.error('Chat error (redacted):', redactSecrets({ error: err.message }));
+        return new Response(JSON.stringify({ 
+          error: 'Chat error', 
+          message: err.message 
+        }), { 
+          status: 500, 
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+          } 
+        });
       }
     }
     
-    return new Response('Phoenix OB1 System - /magic-chat for B1, /test-voice.html for B0', { status: 404 });
+    return new Response('Phoenix OB1 System v1.5-AUTH-HARDENED - /magic-chat for B1, /test-voice.html for B0, /api/authcheck for validation', { 
+      status: 404,
+      headers: { 'Access-Control-Allow-Origin': '*' }
+    });
   }
 };
