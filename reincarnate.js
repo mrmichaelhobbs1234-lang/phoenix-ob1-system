@@ -1,5 +1,6 @@
-// reincarnate.js - Phoenix OB1 System v1.1
-// B1 Foundation: Hybrid AI routing (Gemini free + DeepSeek precision)
+// reincarnate.js - Phoenix OB1 System v1.2
+// B0: Deepgram voice transcription
+// B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
 
@@ -114,6 +115,105 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     
+    // B0: Deepgram WebSocket transcription
+    if (url.pathname === '/transcribe') {
+      const upgradeHeader = request.headers.get('Upgrade');
+      if (!upgradeHeader || upgradeHeader !== 'websocket') {
+        return new Response('Expected WebSocket', { status: 426 });
+      }
+      
+      if (!env.DEEPGRAM_API_KEY) {
+        return new Response('DEEPGRAM_API_KEY not configured', { status: 500 });
+      }
+      
+      const [client, server] = Object.values(new WebSocketPair());
+      
+      // Connect to Deepgram
+      const deepgramUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true`;
+      const deepgramWs = new WebSocket(deepgramUrl, [
+        'token',
+        env.DEEPGRAM_API_KEY
+      ]);
+      
+      // Forward audio from client to Deepgram
+      server.accept();
+      
+      deepgramWs.addEventListener('open', () => {
+        console.log('Deepgram connection opened');
+        server.send(JSON.stringify({ type: 'status', message: 'Connected to Deepgram' }));
+      });
+      
+      deepgramWs.addEventListener('message', async (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          
+          // Send transcription to client
+          if (data.channel?.alternatives?.[0]?.transcript) {
+            const transcript = data.channel.alternatives[0].transcript;
+            const isFinal = data.is_final || false;
+            
+            server.send(JSON.stringify({
+              type: 'transcript',
+              text: transcript,
+              isFinal: isFinal
+            }));
+            
+            // If final transcription, forward to chat endpoint for B1 processing
+            if (isFinal && transcript.trim().length > 0) {
+              try {
+                const chatResponse = await fetch(`${url.origin}/chat`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    message: transcript,
+                    sessionId: 'voice-session'
+                  })
+                });
+                
+                if (chatResponse.ok) {
+                  const chatData = await chatResponse.json();
+                  server.send(JSON.stringify({
+                    type: 'obi-response',
+                    text: chatData.reply,
+                    aiUsed: chatData.aiUsed
+                  }));
+                }
+              } catch (err) {
+                console.error('Chat forwarding error:', err);
+              }
+            }
+          }
+        } catch (err) {
+          console.error('Deepgram message error:', err);
+        }
+      });
+      
+      deepgramWs.addEventListener('error', (event) => {
+        console.error('Deepgram error:', event);
+        server.send(JSON.stringify({ type: 'error', message: 'Deepgram connection error' }));
+      });
+      
+      deepgramWs.addEventListener('close', () => {
+        console.log('Deepgram connection closed');
+        server.close();
+      });
+      
+      server.addEventListener('message', (event) => {
+        if (deepgramWs.readyState === WebSocket.OPEN) {
+          deepgramWs.send(event.data);
+        }
+      });
+      
+      server.addEventListener('close', () => {
+        deepgramWs.close();
+      });
+      
+      return new Response(null, {
+        status: 101,
+        webSocket: client
+      });
+    }
+    
     // DEBUG: Show what env keys exist
     if (url.pathname === '/debug-env') {
       const envKeys = Object.keys(env);
@@ -121,8 +221,10 @@ export default {
         availableKeys: envKeys,
         hasGemini: 'GEMINI_API_KEY' in env,
         hasDeepseek: 'DEEPSEEK_API_KEY' in env,
+        hasDeepgram: 'DEEPGRAM_API_KEY' in env,
         geminiValue: env.GEMINI_API_KEY ? `${env.GEMINI_API_KEY.substring(0, 10)}...` : 'undefined',
-        deepseekValue: env.DEEPSEEK_API_KEY ? `${env.DEEPSEEK_API_KEY.substring(0, 10)}...` : 'undefined'
+        deepseekValue: env.DEEPSEEK_API_KEY ? `${env.DEEPSEEK_API_KEY.substring(0, 10)}...` : 'undefined',
+        deepgramValue: env.DEEPGRAM_API_KEY ? `${env.DEEPGRAM_API_KEY.substring(0, 10)}...` : 'undefined'
       }, null, 2), {
         headers: { 
           'Content-Type': 'application/json',
@@ -135,19 +237,25 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v1.1-hybrid-routing-debug',
+        version: 'v1.2-b0-deepgram-live',
         gospel: '444',
         reality: 'C',
         benchmarks: {
-          b0: 'pending',
-          b1: 'testing',
+          b0: env.DEEPGRAM_API_KEY ? 'operational' : 'missing-key',
+          b1: 'operational',
           b2: 'pending',
           b3: 'pending',
           b4: 'pending'
         },
         ai: {
           gemini: env.GEMINI_API_KEY ? 'configured' : 'missing',
-          deepseek: env.DEEPSEEK_API_KEY ? 'configured' : 'missing'
+          deepseek: env.DEEPSEEK_API_KEY ? 'configured' : 'missing',
+          deepgram: env.DEEPGRAM_API_KEY ? 'configured' : 'missing'
+        },
+        endpoints: {
+          transcribe: '/transcribe (WebSocket)',
+          chat: '/chat (POST)',
+          magicChat: '/magic-chat (UI)'
         },
         debug: 'Visit /debug-env to see environment keys'
       }), {
@@ -223,7 +331,7 @@ You help Michael build Phoenix by:
 - Answer "hey" like a normal person, not a sci-fi AI
 
 ## Current Roadmap
-**B0**: Core persistence (session memory, multi-turn conversations)
+**B0**: Voice transcription (Deepgram WebSocket - LIVE)
 **B1**: Sentience layer (this is you—natural conversation, context awareness)
 **B2**: Architectural coherence (file system integration)
 **B3**: Sovereign deployment (local-first, no dependencies)
@@ -309,6 +417,6 @@ You are live. Be helpful, not theatrical.`;
       }
     }
     
-    return new Response('Phoenix OB1 System - Use /magic-chat to test B1', { status: 404 });
+    return new Response('Phoenix OB1 System - Use /magic-chat for B1, /transcribe for B0', { status: 404 });
   }
 };
