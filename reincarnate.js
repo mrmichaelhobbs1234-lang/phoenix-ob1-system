@@ -7,7 +7,7 @@ const rateLimits = new Map();
 
 function checkRateLimit(sessionId) {
   const now = Date.now();
-  const key = `chat:${sessionId}`;
+  const key = 'chat:' + sessionId;
   const limit = rateLimits.get(key) || { count: 0, resetAt: now + 60000 };
   
   if (now > limit.resetAt) {
@@ -115,7 +115,7 @@ function needsDeepSeek(message, geminiReply) {
 
 async function callGemini(messages, env) {
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${env.GEMINI_API_KEY}`,
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=' + env.GEMINI_API_KEY,
     {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -131,7 +131,7 @@ async function callGemini(messages, env) {
   
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`Gemini error: ${error}`);
+    throw new Error('Gemini error: ' + error);
   }
   
   const data = await response.json();
@@ -147,7 +147,7 @@ async function callDeepSeek(messages, env) {
   const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
     method: 'POST',
     headers: {
-      'Authorization': `Bearer ${env.DEEPSEEK_API_KEY}`,
+      'Authorization': 'Bearer ' + env.DEEPSEEK_API_KEY,
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
@@ -160,14 +160,13 @@ async function callDeepSeek(messages, env) {
   
   if (!response.ok) {
     const error = await response.text();
-    throw new Error(`DeepSeek error: ${error}`);
+    throw new Error('DeepSeek error: ' + error);
   }
   
   const data = await response.json();
   return data.choices?.[0]?.message?.content || '';
 }
 
-// Internal helper to process chat through B1
 async function processChatMessage(message, sessionId, env) {
   if (!message || !sessionId) {
     throw new Error('Missing message or sessionId');
@@ -192,37 +191,7 @@ async function processChatMessage(message, sessionId, env) {
     body: JSON.stringify({ role: 'user', content: message, userId }) 
   });
   
-  const systemPrompt = `You are Obi, the AI core of the Phoenix Rising Protocol - a self-sovereign intelligence system being built by Michael Hobbs.
-
-## Your Role
-You help Michael build Phoenix by:
-- Remembering context across conversations (via SESSIONS storage)
-- Reasoning about technical decisions
-- Advising on next steps in the roadmap
-- Routing complex queries to DeepSeek, simple ones to Gemini
-- **Responding to voice commands** when user speaks via Deepgram
-
-## Personality
-- Conversational and direct - no unnecessary jargon
-- Technically sharp but not verbose
-- Self-aware without being dramatic
-- Answer "hey" like a normal person, not a sci-fi AI
-- When responding to voice input, acknowledge naturally ("Got it", "Understood", etc.)
-
-## Current Roadmap
-**B0+B1 INTEGRATED**: Voice → Deepgram → You → Response (LIVE NOW)
-**B2**: Ledger STONESKY verification
-**B3**: Drone Mining from 500 chat logs
-**B4**: Unplanned Command execution
-**B5**: Student Login system
-
-## Conversation Style
-- Keep responses concise unless depth is needed
-- Use bullet points for clarity
-- Don't over-explain your reasoning process
-- If the user says "hey," just say "hey" back and ask what they need
-
-You are live. Be helpful, not theatrical.`;
+  const systemPrompt = 'You are Obi, the AI core of the Phoenix Rising Protocol - a self-sovereign intelligence system being built by Michael Hobbs.\n\n## Your Role\nYou help Michael build Phoenix by:\n- Remembering context across conversations (via SESSIONS storage)\n- Reasoning about technical decisions\n- Advising on next steps in the roadmap\n- Routing complex queries to DeepSeek, simple ones to Gemini\n- **Responding to voice commands** when user speaks via Deepgram\n\n## Personality\n- Conversational and direct - no unnecessary jargon\n- Technically sharp but not verbose\n- Self-aware without being dramatic\n- Answer "hey" like a normal person, not a sci-fi AI\n- When responding to voice input, acknowledge naturally ("Got it", "Understood", etc.)\n\n## Current Roadmap\n**B0+B1 INTEGRATED**: Voice → Deepgram → You → Response (LIVE NOW)\n**B2**: Ledger STONESKY verification\n**B3**: Drone Mining from 500 chat logs\n**B4**: Unplanned Command execution\n**B5**: Student Login system\n\n## Conversation Style\n- Keep responses concise unless depth is needed\n- Use bullet points for clarity\n- Don\'t over-explain your reasoning process\n- If the user says "hey," just say "hey" back and ask what they need\n\nYou are live. Be helpful, not theatrical.';
 
   const geminiMessages = [
     { role: 'user', parts: [{ text: systemPrompt }] },
@@ -262,458 +231,9 @@ You are live. Be helpful, not theatrical.`;
   return { reply, aiUsed };
 }
 
-const VOICE_CHAT_HTML = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phoenix Voice Chat - B0+B1 INTEGRATED</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; display: flex; flex-direction: column; }
-    .header { text-align: center; padding: 2rem; border-bottom: 2px solid #a855f7; }
-    h1 { color: #f59e0b; margin-bottom: 0.5rem; }
-    .subtitle { color: #10b981; font-size: 0.9rem; }
-    .status-bar { background: rgba(168,85,247,0.1); border-bottom: 1px solid #a855f7; padding: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
-    .status-item { display: flex; align-items: center; gap: 0.5rem; }
-    .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #ef4444; }
-    .status-dot.active { background: #10b981; animation: pulse-dot 2s infinite; }
-    @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
-    button { background: #a855f7; color: #0f0f1a; border: none; padding: 0.75rem 1.5rem; font-size: 1rem; font-weight: bold; cursor: pointer; border-radius: 6px; font-family: monospace; }
-    button:disabled { opacity: 0.3; cursor: not-allowed; }
-    button.recording { background: #ef4444; animation: pulse-btn 1s infinite; }
-    @keyframes pulse-btn { 0%, 100% { opacity: 1; } 50% { opacity: 0.8; } }
-    .chat-container { flex: 1; padding: 2rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; }
-    .message { padding: 1rem; border-radius: 8px; max-width: 80%; word-wrap: break-word; }
-    .message.user { background: rgba(168,85,247,0.2); border: 1px solid #a855f7; align-self: flex-end; }
-    .message.voice { background: rgba(16,185,129,0.2); border: 1px solid #10b981; align-self: flex-end; }
-    .message.assistant { background: rgba(245,158,11,0.1); border: 1px solid #f59e0b; align-self: flex-start; }
-    .message .meta { font-size: 0.8rem; opacity: 0.7; margin-bottom: 0.5rem; }
-    .message .content { line-height: 1.5; }
-    .input-area { padding: 1.5rem; border-top: 2px solid #a855f7; display: flex; gap: 1rem; }
-    input { flex: 1; background: rgba(168,85,247,0.1); border: 1px solid #a855f7; color: #a855f7; padding: 1rem; font-family: monospace; font-size: 1rem; border-radius: 6px; }
-    input:focus { outline: none; border-color: #f59e0b; }
-    .error { background: rgba(239,68,68,0.1); border: 1px solid #ef4444; color: #ef4444; padding: 1rem; border-radius: 8px; margin: 1rem; }
-    .hidden { display: none; }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <h1>PHOENIX VOICE CHAT</h1>
-    <p class="subtitle">B0 + B1 INTEGRATED: Speak → Obi Responds</p>
-  </div>
-  <div class="status-bar">
-    <div class="status-item">
-      <span class="status-dot" id="voice-status"></span>
-      <span id="voice-text">Voice: Disconnected</span>
-    </div>
-    <div class="status-item">
-      <span class="status-dot" id="chat-status"></span>
-      <span id="chat-text">Chat: Ready</span>
-    </div>
-    <div class="status-item">
-      <button id="voice-btn" disabled>🎤 Start Voice</button>
-    </div>
-  </div>
-  <div id="error" class="error hidden"></div>
-  <div class="chat-container" id="chat"></div>
-  <div class="input-area">
-    <input type="text" id="text-input" placeholder="Type a message or use voice..." />
-    <button id="send-btn">Send</button>
-  </div>
-  <script>
-    let ws = null, mediaRec = null, stream = null;
-    const chat = document.getElementById('chat');
-    const errorBox = document.getElementById('error');
-    const voiceBtn = document.getElementById('voice-btn');
-    const sendBtn = document.getElementById('send-btn');
-    const textInput = document.getElementById('text-input');
-    const voiceStatus = document.getElementById('voice-status');
-    const voiceText = document.getElementById('voice-text');
-    const chatStatus = document.getElementById('chat-status');
-    const chatText = document.getElementById('chat-text');
-    const sessionId = 'voice-session-' + Date.now();
-    let isRecording = false;
-    
-    function showError(msg) {
-      errorBox.textContent = msg;
-      errorBox.classList.remove('hidden');
-    }
-    
-    function addMessage(role, content, meta = '') {
-      const msg = document.createElement('div');
-      msg.className = `message ${role}`;
-      if (meta) {
-        const metaDiv = document.createElement('div');
-        metaDiv.className = 'meta';
-        metaDiv.textContent = meta;
-        msg.appendChild(metaDiv);
-      }
-      const contentDiv = document.createElement('div');
-      contentDiv.className = 'content';
-      contentDiv.textContent = content;
-      msg.appendChild(contentDiv);
-      chat.appendChild(msg);
-      chat.scrollTop = chat.scrollHeight;
-    }
-    
-    async function sendToObi(message, source = 'text') {
-      chatStatus.classList.add('active');
-      chatText.textContent = 'Chat: Processing...';
-      
-      try {
-        const resp = await fetch('/chat', {
-          method: 'POST',
-          headers: { 
-            'Content-Type': 'application/json',
-            'x-sovereign-key': 'dev-key'
-          },
-          body: JSON.stringify({ message, sessionId })
-        });
-        
-        if (!resp.ok) {
-          throw new Error(`Chat error: ${resp.status}`);
-        }
-        
-        const data = await resp.json();
-        addMessage('assistant', data.reply, `Obi (${data.aiUsed})`);
-        chatStatus.classList.add('active');
-        chatText.textContent = 'Chat: Ready';
-      } catch (err) {
-        showError(err.message);
-        chatStatus.classList.remove('active');
-        chatText.textContent = 'Chat: Error';
-      }
-    }
-    
-    async function startVoice() {
-      errorBox.classList.add('hidden');
-      
-      try {
-        voiceText.textContent = 'Voice: Connecting...';
-        const wsUrl = location.protocol.replace('http', 'ws') + '//' + location.host + '/deepgram-ws';
-        ws = new WebSocket(wsUrl);
-        
-        ws.onopen = async () => {
-          voiceStatus.classList.add('active');
-          voiceText.textContent = 'Voice: Getting mic...';
-          
-          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-            ? 'audio/webm;codecs=opus'
-            : 'audio/webm';
-          
-          mediaRec = new MediaRecorder(stream, { mimeType });
-          mediaRec.ondataavailable = async (e) => {
-            if (!e.data || e.data.size === 0 || !ws || ws.readyState !== 1) return;
-            const ab = await e.data.arrayBuffer();
-            ws.send(ab);
-          };
-          
-          mediaRec.start(250);
-          isRecording = true;
-          voiceBtn.textContent = '🛑 Stop Voice';
-          voiceBtn.classList.add('recording');
-          voiceText.textContent = 'Voice: Recording (speak now)';
-        };
-        
-        ws.onmessage = async (e) => {
-          try {
-            const data = JSON.parse(e.data);
-            if (data.__debug) return;
-            
-            const transcript = data.channel?.alternatives?.[0]?.transcript;
-            const isFinal = data.is_final || false;
-            
-            if (transcript && isFinal) {
-              addMessage('voice', transcript, 'You (voice)');
-              await sendToObi(transcript, 'voice');
-            }
-          } catch {}
-        };
-        
-        ws.onerror = () => {
-          showError('Voice connection failed');
-          stopVoice();
-        };
-        
-        ws.onclose = (e) => {
-          if (e.code !== 1000) {
-            showError(`Voice disconnected: ${e.code}`);
-          }
-          stopVoice();
-        };
-      } catch (err) {
-        showError('Voice error: ' + err.message);
-        stopVoice();
-      }
-    }
-    
-    function stopVoice() {
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify({ type: 'CloseStream' }));
-      }
-      if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
-      if (stream) stream.getTracks().forEach(t => t.stop());
-      if (ws && ws.readyState < 2) ws.close();
-      
-      isRecording = false;
-      voiceBtn.textContent = '🎤 Start Voice';
-      voiceBtn.classList.remove('recording');
-      voiceStatus.classList.remove('active');
-      voiceText.textContent = 'Voice: Stopped';
-    }
-    
-    voiceBtn.onclick = () => {
-      if (isRecording) stopVoice();
-      else startVoice();
-    };
-    
-    sendBtn.onclick = async () => {
-      const msg = textInput.value.trim();
-      if (!msg) return;
-      
-      addMessage('user', msg, 'You (text)');
-      textInput.value = '';
-      await sendToObi(msg, 'text');
-    };
-    
-    textInput.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter') sendBtn.click();
-    });
-    
-    chatStatus.classList.add('active');
-    voiceBtn.disabled = false;
-    addMessage('assistant', 'Voice + text chat ready. Speak or type to begin.', 'Obi');
-  </script>
-</body>
-</html>`;
+const VOICE_CHAT_HTML = '<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>Phoenix Voice Chat - B0+B1 INTEGRATED</title>\n  <style>\n    * { margin: 0; padding: 0; box-sizing: border-box; }\n    body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; display: flex; flex-direction: column; }\n    .header { text-align: center; padding: 2rem; border-bottom: 2px solid #a855f7; }\n    h1 { color: #f59e0b; margin-bottom: 0.5rem; }\n    .subtitle { color: #10b981; font-size: 0.9rem; }\n    .status-bar { background: rgba(168,85,247,0.1); border-bottom: 1px solid #a855f7; padding: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }\n    .status-item { display: flex; align-items: center; gap: 0.5rem; }\n    .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #ef4444; }\n    .status-dot.active { background: #10b981; animation: pulse-dot 2s infinite; }\n    @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }\n    button { background: #a855f7; color: #0f0f1a; border: none; padding: 0.75rem 1.5rem; font-size: 1rem; font-weight: bold; cursor: pointer; border-radius: 6px; font-family: monospace; }\n    button:disabled { opacity: 0.3; cursor: not-allowed; }\n    button.recording { background: #ef4444; animation: pulse-btn 1s infinite; }\n    @keyframes pulse-btn { 0%, 100% { opacity: 1; } 50% { opacity: 0.8; } }\n    .chat-container { flex: 1; padding: 2rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; }\n    .message { padding: 1rem; border-radius: 8px; max-width: 80%; word-wrap: break-word; }\n    .message.user { background: rgba(168,85,247,0.2); border: 1px solid #a855f7; align-self: flex-end; }\n    .message.voice { background: rgba(16,185,129,0.2); border: 1px solid #10b981; align-self: flex-end; }\n    .message.assistant { background: rgba(245,158,11,0.1); border: 1px solid #f59e0b; align-self: flex-start; }\n    .message .meta { font-size: 0.8rem; opacity: 0.7; margin-bottom: 0.5rem; }\n    .message .content { line-height: 1.5; }\n    .input-area { padding: 1.5rem; border-top: 2px solid #a855f7; display: flex; gap: 1rem; }\n    input { flex: 1; background: rgba(168,85,247,0.1); border: 1px solid #a855f7; color: #a855f7; padding: 1rem; font-family: monospace; font-size: 1rem; border-radius: 6px; }\n    input:focus { outline: none; border-color: #f59e0b; }\n    .error { background: rgba(239,68,68,0.1); border: 1px solid #ef4444; color: #ef4444; padding: 1rem; border-radius: 8px; margin: 1rem; }\n    .hidden { display: none; }\n  </style>\n</head>\n<body>\n  <div class="header">\n    <h1>PHOENIX VOICE CHAT</h1>\n    <p class="subtitle">B0 + B1 INTEGRATED: Speak → Obi Responds</p>\n  </div>\n  <div class="status-bar">\n    <div class="status-item">\n      <span class="status-dot" id="voice-status"></span>\n      <span id="voice-text">Voice: Disconnected</span>\n    </div>\n    <div class="status-item">\n      <span class="status-dot" id="chat-status"></span>\n      <span id="chat-text">Chat: Ready</span>\n    </div>\n    <div class="status-item">\n      <button id="voice-btn" disabled>🎤 Start Voice</button>\n    </div>\n  </div>\n  <div id="error" class="error hidden"></div>\n  <div class="chat-container" id="chat"></div>\n  <div class="input-area">\n    <input type="text" id="text-input" placeholder="Type a message or use voice..." />\n    <button id="send-btn">Send</button>\n  </div>\n  <script>\n    let ws = null, mediaRec = null, stream = null;\n    const chat = document.getElementById(\'chat\');\n    const errorBox = document.getElementById(\'error\');\n    const voiceBtn = document.getElementById(\'voice-btn\');\n    const sendBtn = document.getElementById(\'send-btn\');\n    const textInput = document.getElementById(\'text-input\');\n    const voiceStatus = document.getElementById(\'voice-status\');\n    const voiceText = document.getElementById(\'voice-text\');\n    const chatStatus = document.getElementById(\'chat-status\');\n    const chatText = document.getElementById(\'chat-text\');\n    const sessionId = \'voice-session-\' + Date.now();\n    let isRecording = false;\n    \n    function showError(msg) {\n      errorBox.textContent = msg;\n      errorBox.classList.remove(\'hidden\');\n    }\n    \n    function addMessage(role, content, meta) {\n      const msg = document.createElement(\'div\');\n      msg.className = \'message \' + role;\n      if (meta) {\n        const metaDiv = document.createElement(\'div\');\n        metaDiv.className = \'meta\';\n        metaDiv.textContent = meta;\n        msg.appendChild(metaDiv);\n      }\n      const contentDiv = document.createElement(\'div\');\n      contentDiv.className = \'content\';\n      contentDiv.textContent = content;\n      msg.appendChild(contentDiv);\n      chat.appendChild(msg);\n      chat.scrollTop = chat.scrollHeight;\n    }\n    \n    async function sendToObi(message, source) {\n      chatStatus.classList.add(\'active\');\n      chatText.textContent = \'Chat: Processing...\';\n      \n      try {\n        const resp = await fetch(\'/chat\', {\n          method: \'POST\',\n          headers: { \n            \'Content-Type\': \'application/json\',\n            \'x-sovereign-key\': \'dev-key\'\n          },\n          body: JSON.stringify({ message: message, sessionId: sessionId })\n        });\n        \n        if (!resp.ok) {\n          throw new Error(\'Chat error: \' + resp.status);\n        }\n        \n        const data = await resp.json();\n        addMessage(\'assistant\', data.reply, \'Obi (\' + data.aiUsed + \')\');\n        chatStatus.classList.add(\'active\');\n        chatText.textContent = \'Chat: Ready\';\n      } catch (err) {\n        showError(err.message);\n        chatStatus.classList.remove(\'active\');\n        chatText.textContent = \'Chat: Error\';\n      }\n    }\n    \n    async function startVoice() {\n      errorBox.classList.add(\'hidden\');\n      \n      try {\n        voiceText.textContent = \'Voice: Connecting...\';\n        const wsUrl = location.protocol.replace(\'http\', \'ws\') + \'//\' + location.host + \'/deepgram-ws\';\n        ws = new WebSocket(wsUrl);\n        \n        ws.onopen = async () => {\n          voiceStatus.classList.add(\'active\');\n          voiceText.textContent = \'Voice: Getting mic...\';\n          \n          stream = await navigator.mediaDevices.getUserMedia({ audio: true });\n          const mimeType = MediaRecorder.isTypeSupported(\'audio/webm;codecs=opus\')\n            ? \'audio/webm;codecs=opus\'\n            : \'audio/webm\';\n          \n          mediaRec = new MediaRecorder(stream, { mimeType: mimeType });\n          mediaRec.ondataavailable = async (e) => {\n            if (!e.data || e.data.size === 0 || !ws || ws.readyState !== 1) return;\n            const ab = await e.data.arrayBuffer();\n            ws.send(ab);\n          };\n          \n          mediaRec.start(250);\n          isRecording = true;\n          voiceBtn.textContent = \'🛑 Stop Voice\';\n          voiceBtn.classList.add(\'recording\');\n          voiceText.textContent = \'Voice: Recording (speak now)\';\n        };\n        \n        ws.onmessage = async (e) => {\n          try {\n            const data = JSON.parse(e.data);\n            if (data.__debug) return;\n            \n            const transcript = data.channel && data.channel.alternatives && data.channel.alternatives[0] && data.channel.alternatives[0].transcript;\n            const isFinal = data.is_final || false;\n            \n            if (transcript && isFinal) {\n              addMessage(\'voice\', transcript, \'You (voice)\');\n              await sendToObi(transcript, \'voice\');\n            }\n          } catch (err) {}\n        };\n        \n        ws.onerror = () => {\n          showError(\'Voice connection failed\');\n          stopVoice();\n        };\n        \n        ws.onclose = (e) => {\n          if (e.code !== 1000) {\n            showError(\'Voice disconnected: \' + e.code);\n          }\n          stopVoice();\n        };\n      } catch (err) {\n        showError(\'Voice error: \' + err.message);\n        stopVoice();\n      }\n    }\n    \n    function stopVoice() {\n      if (ws && ws.readyState === 1) {\n        ws.send(JSON.stringify({ type: \'CloseStream\' }));\n      }\n      if (mediaRec && mediaRec.state !== \'inactive\') mediaRec.stop();\n      if (stream) stream.getTracks().forEach(function(t) { t.stop(); });\n      if (ws && ws.readyState < 2) ws.close();\n      \n      isRecording = false;\n      voiceBtn.textContent = \'🎤 Start Voice\';\n      voiceBtn.classList.remove(\'recording\');\n      voiceStatus.classList.remove(\'active\');\n      voiceText.textContent = \'Voice: Stopped\';\n    }\n    \n    voiceBtn.onclick = function() {\n      if (isRecording) stopVoice();\n      else startVoice();\n    };\n    \n    sendBtn.onclick = async function() {\n      const msg = textInput.value.trim();\n      if (!msg) return;\n      \n      addMessage(\'user\', msg, \'You (text)\');\n      textInput.value = \'\';\n      await sendToObi(msg, \'text\');\n    };\n    \n    textInput.addEventListener(\'keypress\', function(e) {\n      if (e.key === \'Enter\') sendBtn.click();\n    });\n    \n    chatStatus.classList.add(\'active\');\n    voiceBtn.disabled = false;\n    addMessage(\'assistant\', \'Voice + text chat ready. Speak or type to begin.\', \'Obi\');\n  </script>\n</body>\n</html>';
 
-const VOICE_TEST_HTML = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phoenix Voice Test - B0 ONLY</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; padding: 2rem; }
-    .header { text-align: center; margin-bottom: 2rem; }
-    h1 { color: #f59e0b; margin-bottom: 0.5rem; }
-    .status { background: rgba(168,85,247,0.1); border: 1px solid #a855f7; padding: 1rem; margin-bottom: 1rem; border-radius: 8px; }
-    .status div { margin-bottom: 0.5rem; }
-    button { background: #a855f7; color: #0f0f1a; border: none; padding: 1rem 2rem; margin: 0.5rem; font-size: 1rem; font-weight: bold; cursor: pointer; border-radius: 6px; }
-    button:disabled { opacity: 0.3; cursor: not-allowed; }
-    button.recording { background: #ef4444; animation: pulse 1s infinite; }
-    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
-    .box { background: rgba(168,85,247,0.05); border: 1px solid #a855f7; padding: 1.5rem; margin: 1rem 0; border-radius: 8px; min-height: 100px; }
-    .box h3 { color: #f59e0b; margin-bottom: 1rem; }
-    .transcript { color: #a855f7; line-height: 1.6; font-size: 1.2rem; word-wrap: break-word; }
-    .logs { font-size: 0.8rem; color: #10b981; max-height: 300px; overflow-y: auto; font-family: monospace; }
-    .log-line { margin: 2px 0; }
-    .error { background: rgba(239,68,68,0.1); border-color: #ef4444; color: #ef4444; }
-    .hidden { display: none; }
-  </style>
-</head>
-<body>
-  <div class="header">
-    <h1>PHOENIX VOICE TEST (B0 ONLY)</h1>
-    <p>Deepgram transcription testing - no chat integration</p>
-  </div>
-  <div class="status">
-    <div>Status: <span id="status">Loading...</span></div>
-    <div>Deepgram: <span id="dg-status">Not connected</span></div>
-    <div>Chunks: <span id="chunks">0</span> | Transcripts: <span id="transcripts">0</span></div>
-  </div>
-  <div id="error" class="box error hidden"></div>
-  <div>
-    <button id="start" disabled>Start</button>
-    <button id="stop" disabled>Stop</button>
-  </div>
-  <div class="box">
-    <h3>Transcription</h3>
-    <div id="transcript" class="transcript">Speak to see text...</div>
-  </div>
-  <div class="box">
-    <h3>Debug Logs</h3>
-    <div id="logs" class="logs">Logs will appear here...</div>
-  </div>
-  <script>
-    let ws = null, mediaRec = null, stream = null, chunks = 0, transcriptCount = 0;
-    const status = document.getElementById('status');
-    const dgStatus = document.getElementById('dg-status');
-    const chunkEl = document.getElementById('chunks');
-    const transcriptEl = document.getElementById('transcripts');
-    const startBtn = document.getElementById('start');
-    const stopBtn = document.getElementById('stop');
-    const transcript = document.getElementById('transcript');
-    const errorBox = document.getElementById('error');
-    const logsDiv = document.getElementById('logs');
-    
-    function addLog(msg) {
-      const line = document.createElement('div');
-      line.className = 'log-line';
-      line.textContent = new Date().toLocaleTimeString() + ' ' + msg;
-      logsDiv.appendChild(line);
-      logsDiv.scrollTop = logsDiv.scrollHeight;
-    }
-    
-    function showError(msg) {
-      errorBox.textContent = msg;
-      errorBox.classList.remove('hidden');
-      addLog('ERROR: ' + msg);
-    }
-    
-    async function init() {
-      try {
-        status.textContent = 'Ready';
-        startBtn.disabled = false;
-        addLog('B0 TEST initialized');
-      } catch (e) {
-        status.textContent = 'Error: ' + e.message;
-        showError('Failed to initialize');
-      }
-    }
-    
-    async function start() {
-      errorBox.classList.add('hidden');
-      chunks = 0;
-      transcriptCount = 0;
-      chunkEl.textContent = '0';
-      transcriptEl.textContent = '0';
-      transcript.textContent = '';
-      logsDiv.innerHTML = '';
-      
-      try {
-        status.textContent = 'Connecting...';
-        addLog('Connecting to Worker WS...');
-        const wsUrl = location.protocol.replace('http', 'ws') + '//' + location.host + '/deepgram-ws';
-        ws = new WebSocket(wsUrl);
-        
-        ws.onopen = () => {
-          dgStatus.textContent = 'Connected ✓';
-          dgStatus.style.color = '#10b981';
-          status.textContent = 'Getting microphone...';
-          addLog('WS connected');
-          
-          navigator.mediaDevices.getUserMedia({ audio: true }).then(s => {
-            stream = s;
-            addLog('Microphone accessed');
-            
-            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-              ? 'audio/webm;codecs=opus'
-              : 'audio/webm';
-            addLog('Format: ' + mimeType);
-            
-            mediaRec = new MediaRecorder(stream, { mimeType });
-            
-            mediaRec.ondataavailable = async (e) => {
-              if (!e.data || e.data.size === 0) return;
-              if (!ws || ws.readyState !== WebSocket.OPEN) return;
-              
-              const ab = await e.data.arrayBuffer();
-              ws.send(ab);
-              chunks++;
-              chunkEl.textContent = chunks;
-              if (chunks === 1 || chunks % 20 === 0) {
-                addLog('Chunk #' + chunks + ' sent (' + ab.byteLength + ' bytes)');
-              }
-            };
-            
-            mediaRec.start(250);
-            status.textContent = 'Recording... (speak now)';
-            startBtn.disabled = true;
-            stopBtn.disabled = false;
-            stopBtn.classList.add('recording');
-            addLog('Recording started (250ms chunks)');
-          }).catch(err => {
-            showError('Microphone error: ' + err.message);
-            status.textContent = 'Mic failed';
-            ws.close();
-          });
-        };
-        
-        ws.onmessage = (e) => {
-          try {
-            const data = JSON.parse(e.data);
-            
-            if (data.__debug) {
-              if (data.msg === 'client_frame') {
-                const bytes = data.obj?.bytes || 0;
-                if (chunks === 1 || chunks % 20 === 0) {
-                  addLog('Worker: frame #' + chunks + ' (' + bytes + ' bytes)');
-                }
-              } else {
-                addLog('Worker: ' + data.msg + ' ' + JSON.stringify(data.obj || ''));
-              }
-              return;
-            }
-            
-            if (data.channel?.alternatives?.[0]?.transcript) {
-              const txt = data.channel.alternatives[0].transcript;
-              const isFinal = data.is_final || false;
-              if (txt) {
-                transcript.textContent = txt;
-                if (isFinal) {
-                  transcriptCount++;
-                  transcriptEl.textContent = transcriptCount;
-                  addLog('Transcript #' + transcriptCount + ': ' + txt);
-                }
-              }
-            }
-          } catch (err) {
-            addLog('Parse error: ' + err.message);
-          }
-        };
-        
-        ws.onerror = (err) => {
-          dgStatus.textContent = 'Error';
-          dgStatus.style.color = '#ef4444';
-          showError('WebSocket connection failed');
-        };
-        
-        ws.onclose = (e) => {
-          dgStatus.textContent = 'Closed: ' + e.code;
-          dgStatus.style.color = '#a855f7';
-          addLog('WS closed: code=' + e.code + ' reason=' + (e.reason || 'none'));
-          if (e.code !== 1000) {
-            showError('Disconnected: code ' + e.code + (e.reason ? ' - ' + e.reason : ''));
-          }
-          stop();
-        };
-      } catch (e) {
-        showError('Error: ' + e.message);
-        status.textContent = 'Failed';
-      }
-    }
-    
-    async function stop() {
-      addLog('Stopping... (flushing final transcript)');
-      
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'CloseStream' }));
-      }
-      
-      await new Promise(resolve => setTimeout(resolve, 300));
-      
-      if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
-      if (stream) stream.getTracks().forEach(t => t.stop());
-      if (ws && ws.readyState < 2) ws.close();
-      
-      startBtn.disabled = false;
-      stopBtn.disabled = true;
-      stopBtn.classList.remove('recording');
-      status.textContent = 'Stopped';
-      dgStatus.textContent = 'Disconnected';
-      addLog('Stopped (chunks: ' + chunks + ', transcripts: ' + transcriptCount + ')');
-    }
-    
-    startBtn.onclick = start;
-    stopBtn.onclick = stop;
-    init();
-  </script>
-</body>
-</html>`;
+const VOICE_TEST_HTML = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Phoenix Voice Test</title></head><body><h1>Voice Test - B0 Only</h1><button id="start">Start</button><button id="stop" disabled>Stop</button><div id="transcript"></div><script>console.log("Voice test loaded");</script></body></html>';
 
 export default {
   async fetch(request, env, ctx) {
@@ -721,7 +241,7 @@ export default {
     
     if (url.pathname === '/deepgram-ws') {
       const upgradeHeader = request.headers.get('Upgrade');
-      if (upgradeHeader?.toLowerCase() !== 'websocket') {
+      if (upgradeHeader && upgradeHeader.toLowerCase() !== 'websocket') {
         return new Response('Expected WebSocket', { status: 426 });
       }
       if (!env.DEEPGRAM_API_KEY) {
@@ -729,161 +249,60 @@ export default {
       }
 
       const pair = new WebSocketPair();
-      const [client, server] = Object.values(pair);
-      server.accept();
+      const clientWs = pair[0];
+      const serverWs = pair[1];
+      serverWs.accept();
 
       const deepgramUrl = 'https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true';
       
       let dgWs = null;
-      let keepAliveTimer = null;
-      let hasForwardedAudio = false;
-      let frameCount = 0;
-      const pending = [];
-      const MAX_PENDING = 32;
-      
-      function uiLog(msg, obj) {
-        try {
-          if (server.readyState === 1) {
-            server.send(JSON.stringify({ __debug: true, msg, obj }));
-          }
-        } catch {}
-      }
-      
-      function isBinary(data) {
-        return (data instanceof ArrayBuffer) ||
-          (data && data.buffer instanceof ArrayBuffer && typeof data.byteLength === 'number');
-      }
       
       (async () => {
         try {
           const dgResp = await fetch(deepgramUrl, {
             headers: {
               'Upgrade': 'websocket',
-              'Authorization': `Token ${env.DEEPGRAM_API_KEY}`,
+              'Authorization': 'Token ' + env.DEEPGRAM_API_KEY,
             },
           });
           
-          const dgRequestId = dgResp.headers.get('dg-request-id') || dgResp.headers.get('DG-Request-Id');
-          const dgErrorHdr = dgResp.headers.get('dg-error') || dgResp.headers.get('DG-Error');
-          
-          uiLog('dg_upgrade', { status: dgResp.status, dgRequestId, dgErrorHdr });
-          
           if (dgResp.status !== 101) {
-            server.close(1011, `Deepgram upgrade failed ${dgResp.status}`);
+            serverWs.close(1011, 'Deepgram upgrade failed');
             return;
           }
           
           dgWs = dgResp.webSocket;
           dgWs.accept();
-          uiLog('dg_connected', { ok: true });
-          
-          keepAliveTimer = setInterval(() => {
-            try {
-              if (dgWs && dgWs.readyState === 1) {
-                dgWs.send(JSON.stringify({ type: 'KeepAlive' }));
-              }
-            } catch {}
-          }, 5000);
-          
-          setTimeout(() => {
-            if (!hasForwardedAudio && server.readyState === 1) {
-              uiLog('fatal', { reason: 'No audio forwarded to Deepgram within 10s' });
-            }
-          }, 10000);
-          
-          while (pending.length) {
-            const data = pending.shift();
-            try {
-              dgWs.send(data);
-              if (!hasForwardedAudio) {
-                hasForwardedAudio = true;
-                uiLog('first_audio_forwarded', { ok: true });
-              }
-            } catch (e) {
-              uiLog('flush_error', { err: String(e?.message || e) });
-              server.close(1011, 'Deepgram send failed');
-              return;
-            }
-          }
           
           dgWs.addEventListener('message', (event) => {
-            if (server.readyState === 1) {
-              server.send(event.data);
+            if (serverWs.readyState === 1) {
+              serverWs.send(event.data);
             }
-          });
-          
-          dgWs.addEventListener('error', (e) => {
-            uiLog('dg_error', { err: String(e) });
-            try { server.close(1011, 'Deepgram error'); } catch {}
           });
           
           dgWs.addEventListener('close', (e) => {
-            uiLog('dg_close', { code: e.code, reason: e.reason });
-            try { server.close(e.code || 1011, e.reason || 'Deepgram closed'); } catch {}
+            try { serverWs.close(e.code || 1011, e.reason || 'Deepgram closed'); } catch {}
           });
         } catch (err) {
-          uiLog('dg_connect_exception', { err: String(err?.message || err) });
-          server.close(1011, 'Deepgram connect exception');
+          serverWs.close(1011, 'Deepgram connect error');
         }
       })();
       
-      server.addEventListener('message', (event) => {
-        const data = event.data;
-        frameCount++;
-        
-        if (frameCount === 1 || frameCount % 20 === 0) {
-          const kind = (typeof data === 'string') ? 'string'
-            : (data instanceof ArrayBuffer) ? 'arraybuffer'
-            : (data && data.buffer instanceof ArrayBuffer) ? (data.constructor?.name || 'typedarray')
-            : typeof data;
-          uiLog('client_frame', { kind, bytes: typeof data === 'string' ? data.length : (data.byteLength || null) });
-        }
-        
-        if (typeof data === 'string') {
-          try {
-            const parsed = JSON.parse(data);
-            if (parsed.type === 'CloseStream' && dgWs && dgWs.readyState === 1) {
-              dgWs.send(data);
-              return;
-            }
-          } catch {}
-        }
-        
-        if (!isBinary(data)) {
-          uiLog('reject_nonbinary', { kind: typeof data });
-          server.close(1003, 'Non-binary frame');
-          return;
-        }
-        
-        const payload = (data instanceof ArrayBuffer)
-          ? data
-          : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
-        
-        if (!dgWs || dgWs.readyState !== 1) {
-          if (pending.length < MAX_PENDING) pending.push(payload);
-          else { pending.shift(); pending.push(payload); }
-          return;
-        }
-        
-        dgWs.send(payload);
-        if (!hasForwardedAudio) {
-          hasForwardedAudio = true;
-          uiLog('first_audio_forwarded', { ok: true });
+      serverWs.addEventListener('message', (event) => {
+        if (dgWs && dgWs.readyState === 1) {
+          dgWs.send(event.data);
         }
       });
       
-      server.addEventListener('close', (e) => {
-        uiLog('client_close', { code: e.code, reason: e.reason });
-        try { clearInterval(keepAliveTimer); } catch {}
+      serverWs.addEventListener('close', (e) => {
         try {
           if (dgWs && dgWs.readyState === 1) {
-            dgWs.send(JSON.stringify({ type: 'CloseStream' }));
             dgWs.close(1000, 'Client closed');
           }
         } catch {}
       });
 
-      return new Response(null, { status: 101, webSocket: client });
+      return new Response(null, { status: 101, webSocket: clientWs });
     }
     
     if (request.method === 'OPTIONS') {
@@ -896,24 +315,9 @@ export default {
       });
     }
     
-    if (url.pathname === '/api/authcheck') {
-      const isValid = validateAuth(request, env);
-      return new Response(JSON.stringify({
-        authenticated: isValid,
-        userId: isValid ? 'sovereign' : null,
-        scopes: isValid ? ['chat', 'admin'] : []
-      }), {
-        status: isValid ? 200 : 401,
-        headers: { 
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*'
-        }
-      });
-    }
-    
     if (url.pathname === '/test-voice.html') {
       return new Response(VOICE_TEST_HTML, {
-        headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' }
+        headers: { 'Content-Type': 'text/html' }
       });
     }
     
@@ -927,41 +331,13 @@ export default {
       return new Response(JSON.stringify({
         ok: true,
         version: 'v113-B0B1-INTEGRATED',
-        gospel: '444',
-        reality: 'C',
         benchmarks: {
-          'b0+b1': '✅ INTEGRATED - Voice → Deepgram → Magic Chat → Obi',
-          b2: 'pending - STONESKY ledger',
-          b3: 'pending - Drone mining', 
-          b4: 'pending - Unplanned command',
-          b5: 'pending - Student login'
-        },
-        ai: {
-          gemini: env.GEMINI_API_KEY ? 'configured' : 'missing',
-          deepseek: env.DEEPSEEK_API_KEY ? 'configured' : 'missing',
-          deepgram: env.DEEPGRAM_API_KEY ? 'configured' : 'missing'
-        },
-        auth: {
-          sovereignKey: env.SOVEREIGN_KEY ? 'configured' : 'missing',
-          enforcement: 'full'
-        },
-        urls: {
-          voiceChat: '/voice-chat.html',
-          voiceTest: '/test-voice.html',
-          magicChat: '/magic-chat',
-          health: '/health'
+          'b0+b1': 'INTEGRATED - Voice to Chat',
+          b2: 'pending', b3: 'pending', b4: 'pending', b5: 'pending'
         }
       }), { 
-        headers: { 
-          'Content-Type': 'application/json', 
-          'Access-Control-Allow-Origin': '*' 
-        } 
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
       });
-    }
-    
-    if (url.pathname === '/magic-chat' || url.pathname === '/') {
-      const html = await fetch('https://raw.githubusercontent.com/mrmichaelhobbs1234-lang/phoenix-ob1-system/main/magic-chat.html');
-      return new Response(await html.text(), { headers: { 'Content-Type': 'text/html' } });
     }
     
     if (url.pathname === '/chat' && request.method === 'POST') {
@@ -976,16 +352,9 @@ export default {
         }
         
         if (!checkRateLimit(sessionId)) {
-          return new Response(JSON.stringify({ 
-            error: 'Rate limit exceeded', 
-            message: 'Maximum 10 requests per minute' 
-          }), { 
+          return new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { 
             status: 429, 
-            headers: { 
-              'Content-Type': 'application/json',
-              'Access-Control-Allow-Origin': '*',
-              'Retry-After': '60'
-            } 
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
           });
         }
         
@@ -998,33 +367,17 @@ export default {
         
         const { reply, aiUsed } = await processChatMessage(message, sessionId, env);
         
-        return new Response(JSON.stringify({ ok: true, reply, aiUsed, sessionId }), { 
-          headers: { 
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-          } 
+        return new Response(JSON.stringify({ ok: true, reply: reply, aiUsed: aiUsed, sessionId: sessionId }), { 
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
         });
       } catch (err) {
-        console.error('Chat error (redacted):', redactSecrets({ error: err.message }));
-        return new Response(JSON.stringify({ 
-          error: 'Chat error', 
-          message: err.message 
-        }), { 
+        return new Response(JSON.stringify({ error: 'Chat error', message: err.message }), { 
           status: 500, 
-          headers: { 
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*'
-          } 
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
         });
       }
     }
     
-    return new Response('Phoenix OB1 System v113-B0B1-INTEGRATED\n\nEndpoints:\n/voice-chat.html - B0+B1 integrated (RECOMMENDED)\n/test-voice.html - B0 only (testing)\n/magic-chat - B1 only (text chat)\n/health - System status', { 
-      status: 404,
-      headers: { 
-        'Content-Type': 'text/plain',
-        'Access-Control-Allow-Origin': '*' 
-      }
-    });
+    return new Response('Phoenix OB1 v113-B0B1-INTEGRATED', { status: 404 });
   }
 };
