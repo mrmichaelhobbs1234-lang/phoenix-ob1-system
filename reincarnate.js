@@ -214,6 +214,14 @@ export default {
       });
     }
     
+    // B0: Voice test UI
+    if (url.pathname === '/test-voice.html') {
+      const html = await fetch('https://raw.githubusercontent.com/mrmichaelhobbs1234-lang/phoenix-ob1-system/main/test-voice.html');
+      return new Response(await html.text(), {
+        headers: { 'Content-Type': 'text/html' }
+      });
+    }
+    
     // DEBUG: Show what env keys exist
     if (url.pathname === '/debug-env') {
       const envKeys = Object.keys(env);
@@ -255,7 +263,8 @@ export default {
         endpoints: {
           transcribe: '/transcribe (WebSocket)',
           chat: '/chat (POST)',
-          magicChat: '/magic-chat (UI)'
+          magicChat: '/magic-chat (UI)',
+          testVoice: '/test-voice.html (UI)'
         },
         debug: 'Visit /debug-env to see environment keys'
       }), {
@@ -417,6 +426,6 @@ You are live. Be helpful, not theatrical.`;
       }
     }
     
-    return new Response('Phoenix OB1 System - Use /magic-chat for B1, /transcribe for B0', { status: 404 });
+    return new Response('Phoenix OB1 System - Use /magic-chat for B1, /test-voice.html for B0', { status: 404 });
   }
 };
