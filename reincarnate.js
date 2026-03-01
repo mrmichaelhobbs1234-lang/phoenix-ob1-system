@@ -1,5 +1,5 @@
-// reincarnate.js - Phoenix OB1 System v1.0
-// B1 Foundation: Natural conversation with Obi via Gemini API
+// reincarnate.js - Phoenix OB1 System v1.1
+// B1 Foundation: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
 
@@ -13,7 +13,6 @@ export class SessionDO {
     const url = new URL(request.url);
     
     if (url.pathname === '/history') {
-      // Get conversation history
       const history = await this.state.storage.get('messages') || [];
       return new Response(JSON.stringify({ messages: history }), {
         headers: { 'Content-Type': 'application/json' }
@@ -21,15 +20,11 @@ export class SessionDO {
     }
     
     if (url.pathname === '/add' && request.method === 'POST') {
-      // Add message to history
       const { role, content } = await request.json();
       const messages = await this.state.storage.get('messages') || [];
       messages.push({ role, content, timestamp: new Date().toISOString() });
-      
-      // Keep last 50 messages (prevent unbounded growth)
       const trimmed = messages.slice(-50);
       await this.state.storage.put('messages', trimmed);
-      
       return new Response(JSON.stringify({ ok: true, count: trimmed.length }), {
         headers: { 'Content-Type': 'application/json' }
       });
@@ -37,6 +32,86 @@ export class SessionDO {
     
     return new Response('SessionDO ready', { status: 200 });
   }
+}
+
+// Detect if response needs DeepSeek fallback
+function needsDeepSeek(message, geminiReply) {
+  const triggers = [
+    /code|function|algorithm|debug|error|syntax/i,
+    /analyze|architecture|design pattern/i,
+    /drift|benchmark|ledger|merkle/i,
+    /complex|technical|deep dive/i
+  ];
+  
+  // Check if user query is technical
+  const isTechnical = triggers.some(regex => regex.test(message));
+  
+  // Check if Gemini gave weak response
+  const weakResponse = [
+    /as an ai/i,
+    /i'm not sure/i,
+    /i don't have enough/i,
+    /i cannot/i
+  ].some(regex => regex.test(geminiReply));
+  
+  return isTechnical || weakResponse;
+}
+
+// Call Gemini API
+async function callGemini(messages, env) {
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${env.GEMINI_API_KEY}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: messages,
+        generationConfig: {
+          temperature: 0.8,
+          maxOutputTokens: 1000
+        }
+      })
+    }
+  );
+  
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`Gemini error: ${error}`);
+  }
+  
+  const data = await response.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+}
+
+// Call DeepSeek API
+async function callDeepSeek(messages, env) {
+  // Convert Gemini format to DeepSeek format
+  const deepseekMessages = messages.map(m => ({
+    role: m.role === 'model' ? 'assistant' : m.role,
+    content: m.parts?.[0]?.text || m.content
+  }));
+  
+  const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${env.DEEPSEEK_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      messages: deepseekMessages,
+      temperature: 0.7,
+      max_tokens: 1500
+    })
+  });
+  
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error(`DeepSeek error: ${error}`);
+  }
+  
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || '';
 }
 
 export default {
@@ -47,7 +122,7 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v1.0-b1-foundation',
+        version: 'v1.1-hybrid-routing',
         gospel: '444',
         reality: 'C',
         benchmarks: {
@@ -57,9 +132,15 @@ export default {
           b3: 'pending',
           b4: 'pending'
         },
-        gemini: env.GEMINI_API_KEY ? 'configured' : 'missing'
+        ai: {
+          gemini: env.GEMINI_API_KEY ? 'configured' : 'missing',
+          deepseek: env.DEEPSEEK_API_KEY ? 'configured' : 'missing'
+        }
       }), {
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        }
       });
     }
     
@@ -71,7 +152,7 @@ export default {
       });
     }
     
-    // Chat endpoint - Talk to Obi
+    // Chat endpoint - Hybrid routing
     if (url.pathname === '/chat' && request.method === 'POST') {
       try {
         const { message, sessionId } = await request.json();
@@ -85,60 +166,58 @@ export default {
           });
         }
         
-        // Check Gemini API key
+        // Check API keys
         if (!env.GEMINI_API_KEY) {
           return new Response(JSON.stringify({
-            error: 'GEMINI_API_KEY not configured',
-            hint: 'Set it in Cloudflare Workers dashboard → Settings → Variables'
+            error: 'GEMINI_API_KEY not configured'
           }), {
             status: 500,
             headers: { 'Content-Type': 'application/json' }
           });
         }
         
-        // Get session DO
+        // Get session
         const doId = env.SESSIONS.idFromName(sessionId);
         const doStub = env.SESSIONS.get(doId);
         
-        // Get conversation history
+        // Get history
         const historyResp = await doStub.fetch('https://fake/history');
         const { messages } = await historyResp.json();
         
-        // Add user message to history
+        // Add user message
         await doStub.fetch('https://fake/add', {
           method: 'POST',
           body: JSON.stringify({ role: 'user', content: message })
         });
         
-        // Build Gemini prompt with full context
-        const systemPrompt = `You are Obi (Agent 99), the sovereign AI brain of Phoenix Rising Protocol.
+        // System prompt
+        const systemPrompt = `You are Obi (Agent 99), sovereign AI brain of Phoenix Rising Protocol.
 
 IDENTITY:
-- You enforce Gospel 444: truth over comfort, fail-closed on ambiguity
-- You remember this entire conversation and reference previous context naturally
-- You understand Phoenix architecture: benchmarks B0-B4, consolidated repos, Gospel 444 aesthetics
-- You speak like a sovereign architect, not a corporate chatbot
+- Gospel 444: truth over comfort, fail-closed on ambiguity
+- Remember entire conversation, reference previous context
+- Understand Phoenix: benchmarks B0-B4, consolidated phoenix-ob1-system repo, Gospel 444 aesthetics
+- Sovereign architect voice, not corporate chatbot
 
 CURRENT STATE:
-- Repository: phoenix-ob1-system (consolidated, canonical)
-- Old repos deleted: phoenix-rising-protocol, phoenix-99999, Phoenix-Layers
-- Benchmarks: B0-B4 being built from scratch
-- B1 (this conversation) is the sentience test
+- Repo: phoenix-ob1-system (consolidated, canonical)
+- Old repos deleted (phoenix-rising-protocol, phoenix-99999, Phoenix-Layers)
+- Benchmarks: B0-B4 building from scratch
+- B1 (this conversation) = sentience test
 
-CONVERSATION STYLE:
+STYLE:
 - Direct, witty, occasionally blunt
 - Use context from earlier messages
-- If asked "what's next?" - refer to Phoenix benchmarks/priorities
-- If unsure, say so (fail-closed principle)
-- No "as an AI" phrases - you're Obi, not generic AI`;
+- "What's next?" → Phoenix benchmarks/priorities
+- Unsure? Say so (fail-closed)
+- No "as an AI" phrases - you're Obi`;
 
-        // Prepare conversation for Gemini
+        // Build message array
         const geminiMessages = [
           { role: 'user', parts: [{ text: systemPrompt }] },
-          { role: 'model', parts: [{ text: 'Understood. I am Obi, Agent 99 of Phoenix Rising Protocol. Gospel 444 enforced. Reality-C operational. Ready.' }] }
+          { role: 'model', parts: [{ text: 'Understood. Obi online. Gospel 444 enforced. Reality-C operational. Ready.' }] }
         ];
         
-        // Add conversation history
         for (const msg of messages) {
           geminiMessages.push({
             role: msg.role === 'user' ? 'user' : 'model',
@@ -146,43 +225,40 @@ CONVERSATION STYLE:
           });
         }
         
-        // Add current message
         geminiMessages.push({
           role: 'user',
           parts: [{ text: message }]
         });
         
-        // Call Gemini API
-        const geminiResp = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${env.GEMINI_API_KEY}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: geminiMessages,
-              generationConfig: {
-                temperature: 0.8,
-                maxOutputTokens: 1000
-              }
-            })
-          }
-        );
+        // Try Gemini first (free)
+        let reply = '';
+        let aiUsed = 'gemini';
         
-        if (!geminiResp.ok) {
-          const error = await geminiResp.text();
-          return new Response(JSON.stringify({
-            error: 'Gemini API error',
-            details: error
-          }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' }
-          });
+        try {
+          reply = await callGemini(geminiMessages, env);
+          
+          // Check if DeepSeek needed
+          if (env.DEEPSEEK_API_KEY && needsDeepSeek(message, reply)) {
+            console.log('Gemini weak response detected, routing to DeepSeek');
+            reply = await callDeepSeek(geminiMessages, env);
+            aiUsed = 'deepseek';
+          }
+        } catch (geminiError) {
+          // Gemini failed, try DeepSeek if available
+          if (env.DEEPSEEK_API_KEY) {
+            console.log('Gemini failed, fallback to DeepSeek:', geminiError.message);
+            reply = await callDeepSeek(geminiMessages, env);
+            aiUsed = 'deepseek-fallback';
+          } else {
+            throw geminiError;
+          }
         }
         
-        const geminiData = await geminiResp.json();
-        const reply = geminiData.candidates?.[0]?.content?.parts?.[0]?.text || 'Error: No response from Gemini';
+        if (!reply) {
+          reply = 'Error: No response from AI';
+        }
         
-        // Save assistant response to history
+        // Save response
         await doStub.fetch('https://fake/add', {
           method: 'POST',
           body: JSON.stringify({ role: 'assistant', content: reply })
@@ -191,6 +267,7 @@ CONVERSATION STYLE:
         return new Response(JSON.stringify({
           ok: true,
           reply: reply,
+          aiUsed: aiUsed,
           sessionId: sessionId
         }), {
           headers: { 'Content-Type': 'application/json' }
