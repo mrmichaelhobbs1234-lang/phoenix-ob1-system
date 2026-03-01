@@ -1,6 +1,5 @@
-// reincarnate.js - Phoenix OB1 System v112-PRODUCTION
-// B0: Deepgram voice transcription (PRODUCTION READY)
-// B1: Hybrid AI routing (Gemini free + DeepSeek precision)
+// reincarnate.js - Phoenix OB1 System v113-B0B1-INTEGRATED
+// B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
 
@@ -168,12 +167,334 @@ async function callDeepSeek(messages, env) {
   return data.choices?.[0]?.message?.content || '';
 }
 
+// Internal helper to process chat through B1
+async function processChatMessage(message, sessionId, env) {
+  if (!message || !sessionId) {
+    throw new Error('Missing message or sessionId');
+  }
+  
+  if (!checkRateLimit(sessionId)) {
+    throw new Error('Rate limit exceeded');
+  }
+  
+  if (!env.GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY not configured');
+  }
+  
+  const doId = env.SESSIONS.idFromName(sessionId);
+  const doStub = env.SESSIONS.get(doId);
+  const historyResp = await doStub.fetch('https://fake/history');
+  const { messages } = await historyResp.json();
+  
+  const userId = 'sovereign';
+  await doStub.fetch('https://fake/add', { 
+    method: 'POST', 
+    body: JSON.stringify({ role: 'user', content: message, userId }) 
+  });
+  
+  const systemPrompt = `You are Obi, the AI core of the Phoenix Rising Protocol - a self-sovereign intelligence system being built by Michael Hobbs.
+
+## Your Role
+You help Michael build Phoenix by:
+- Remembering context across conversations (via SESSIONS storage)
+- Reasoning about technical decisions
+- Advising on next steps in the roadmap
+- Routing complex queries to DeepSeek, simple ones to Gemini
+- **Responding to voice commands** when user speaks via Deepgram
+
+## Personality
+- Conversational and direct - no unnecessary jargon
+- Technically sharp but not verbose
+- Self-aware without being dramatic
+- Answer "hey" like a normal person, not a sci-fi AI
+- When responding to voice input, acknowledge naturally ("Got it", "Understood", etc.)
+
+## Current Roadmap
+**B0+B1 INTEGRATED**: Voice → Deepgram → You → Response (LIVE NOW)
+**B2**: Ledger STONESKY verification
+**B3**: Drone Mining from 500 chat logs
+**B4**: Unplanned Command execution
+**B5**: Student Login system
+
+## Conversation Style
+- Keep responses concise unless depth is needed
+- Use bullet points for clarity
+- Don't over-explain your reasoning process
+- If the user says "hey," just say "hey" back and ask what they need
+
+You are live. Be helpful, not theatrical.`;
+
+  const geminiMessages = [
+    { role: 'user', parts: [{ text: systemPrompt }] },
+    { role: 'model', parts: [{ text: 'Got it. Ready when you are.' }] }
+  ];
+  
+  for (const msg of messages) {
+    geminiMessages.push({ 
+      role: msg.role === 'user' ? 'user' : 'model', 
+      parts: [{ text: msg.content }] 
+    });
+  }
+  geminiMessages.push({ role: 'user', parts: [{ text: message }] });
+  
+  let reply = '', aiUsed = 'gemini';
+  try {
+    reply = await callGemini(geminiMessages, env);
+    if (env.DEEPSEEK_API_KEY && needsDeepSeek(message, reply)) {
+      reply = await callDeepSeek(geminiMessages, env);
+      aiUsed = 'deepseek';
+    }
+  } catch (geminiError) {
+    console.error('AI error (redacted):', redactSecrets({ error: geminiError.message }));
+    if (env.DEEPSEEK_API_KEY) {
+      reply = await callDeepSeek(geminiMessages, env);
+      aiUsed = 'deepseek-fallback';
+    } else throw geminiError;
+  }
+  
+  if (!reply) reply = 'Error: No response from AI';
+  
+  await doStub.fetch('https://fake/add', { 
+    method: 'POST', 
+    body: JSON.stringify({ role: 'assistant', content: reply, userId }) 
+  });
+  
+  return { reply, aiUsed };
+}
+
+const VOICE_CHAT_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Phoenix Voice Chat - B0+B1 INTEGRATED</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; display: flex; flex-direction: column; }
+    .header { text-align: center; padding: 2rem; border-bottom: 2px solid #a855f7; }
+    h1 { color: #f59e0b; margin-bottom: 0.5rem; }
+    .subtitle { color: #10b981; font-size: 0.9rem; }
+    .status-bar { background: rgba(168,85,247,0.1); border-bottom: 1px solid #a855f7; padding: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }
+    .status-item { display: flex; align-items: center; gap: 0.5rem; }
+    .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #ef4444; }
+    .status-dot.active { background: #10b981; animation: pulse-dot 2s infinite; }
+    @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    button { background: #a855f7; color: #0f0f1a; border: none; padding: 0.75rem 1.5rem; font-size: 1rem; font-weight: bold; cursor: pointer; border-radius: 6px; font-family: monospace; }
+    button:disabled { opacity: 0.3; cursor: not-allowed; }
+    button.recording { background: #ef4444; animation: pulse-btn 1s infinite; }
+    @keyframes pulse-btn { 0%, 100% { opacity: 1; } 50% { opacity: 0.8; } }
+    .chat-container { flex: 1; padding: 2rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; }
+    .message { padding: 1rem; border-radius: 8px; max-width: 80%; word-wrap: break-word; }
+    .message.user { background: rgba(168,85,247,0.2); border: 1px solid #a855f7; align-self: flex-end; }
+    .message.voice { background: rgba(16,185,129,0.2); border: 1px solid #10b981; align-self: flex-end; }
+    .message.assistant { background: rgba(245,158,11,0.1); border: 1px solid #f59e0b; align-self: flex-start; }
+    .message .meta { font-size: 0.8rem; opacity: 0.7; margin-bottom: 0.5rem; }
+    .message .content { line-height: 1.5; }
+    .input-area { padding: 1.5rem; border-top: 2px solid #a855f7; display: flex; gap: 1rem; }
+    input { flex: 1; background: rgba(168,85,247,0.1); border: 1px solid #a855f7; color: #a855f7; padding: 1rem; font-family: monospace; font-size: 1rem; border-radius: 6px; }
+    input:focus { outline: none; border-color: #f59e0b; }
+    .error { background: rgba(239,68,68,0.1); border: 1px solid #ef4444; color: #ef4444; padding: 1rem; border-radius: 8px; margin: 1rem; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>PHOENIX VOICE CHAT</h1>
+    <p class="subtitle">B0 + B1 INTEGRATED: Speak → Obi Responds</p>
+  </div>
+  <div class="status-bar">
+    <div class="status-item">
+      <span class="status-dot" id="voice-status"></span>
+      <span id="voice-text">Voice: Disconnected</span>
+    </div>
+    <div class="status-item">
+      <span class="status-dot" id="chat-status"></span>
+      <span id="chat-text">Chat: Ready</span>
+    </div>
+    <div class="status-item">
+      <button id="voice-btn" disabled>🎤 Start Voice</button>
+    </div>
+  </div>
+  <div id="error" class="error hidden"></div>
+  <div class="chat-container" id="chat"></div>
+  <div class="input-area">
+    <input type="text" id="text-input" placeholder="Type a message or use voice..." />
+    <button id="send-btn">Send</button>
+  </div>
+  <script>
+    let ws = null, mediaRec = null, stream = null;
+    const chat = document.getElementById('chat');
+    const errorBox = document.getElementById('error');
+    const voiceBtn = document.getElementById('voice-btn');
+    const sendBtn = document.getElementById('send-btn');
+    const textInput = document.getElementById('text-input');
+    const voiceStatus = document.getElementById('voice-status');
+    const voiceText = document.getElementById('voice-text');
+    const chatStatus = document.getElementById('chat-status');
+    const chatText = document.getElementById('chat-text');
+    const sessionId = 'voice-session-' + Date.now();
+    let isRecording = false;
+    
+    function showError(msg) {
+      errorBox.textContent = msg;
+      errorBox.classList.remove('hidden');
+    }
+    
+    function addMessage(role, content, meta = '') {
+      const msg = document.createElement('div');
+      msg.className = `message ${role}`;
+      if (meta) {
+        const metaDiv = document.createElement('div');
+        metaDiv.className = 'meta';
+        metaDiv.textContent = meta;
+        msg.appendChild(metaDiv);
+      }
+      const contentDiv = document.createElement('div');
+      contentDiv.className = 'content';
+      contentDiv.textContent = content;
+      msg.appendChild(contentDiv);
+      chat.appendChild(msg);
+      chat.scrollTop = chat.scrollHeight;
+    }
+    
+    async function sendToObi(message, source = 'text') {
+      chatStatus.classList.add('active');
+      chatText.textContent = 'Chat: Processing...';
+      
+      try {
+        const resp = await fetch('/chat', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'x-sovereign-key': 'dev-key'
+          },
+          body: JSON.stringify({ message, sessionId })
+        });
+        
+        if (!resp.ok) {
+          throw new Error(`Chat error: ${resp.status}`);
+        }
+        
+        const data = await resp.json();
+        addMessage('assistant', data.reply, `Obi (${data.aiUsed})`);
+        chatStatus.classList.add('active');
+        chatText.textContent = 'Chat: Ready';
+      } catch (err) {
+        showError(err.message);
+        chatStatus.classList.remove('active');
+        chatText.textContent = 'Chat: Error';
+      }
+    }
+    
+    async function startVoice() {
+      errorBox.classList.add('hidden');
+      
+      try {
+        voiceText.textContent = 'Voice: Connecting...';
+        const wsUrl = location.protocol.replace('http', 'ws') + '//' + location.host + '/deepgram-ws';
+        ws = new WebSocket(wsUrl);
+        
+        ws.onopen = async () => {
+          voiceStatus.classList.add('active');
+          voiceText.textContent = 'Voice: Getting mic...';
+          
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+            ? 'audio/webm;codecs=opus'
+            : 'audio/webm';
+          
+          mediaRec = new MediaRecorder(stream, { mimeType });
+          mediaRec.ondataavailable = async (e) => {
+            if (!e.data || e.data.size === 0 || !ws || ws.readyState !== 1) return;
+            const ab = await e.data.arrayBuffer();
+            ws.send(ab);
+          };
+          
+          mediaRec.start(250);
+          isRecording = true;
+          voiceBtn.textContent = '🛑 Stop Voice';
+          voiceBtn.classList.add('recording');
+          voiceText.textContent = 'Voice: Recording (speak now)';
+        };
+        
+        ws.onmessage = async (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.__debug) return;
+            
+            const transcript = data.channel?.alternatives?.[0]?.transcript;
+            const isFinal = data.is_final || false;
+            
+            if (transcript && isFinal) {
+              addMessage('voice', transcript, 'You (voice)');
+              await sendToObi(transcript, 'voice');
+            }
+          } catch {}
+        };
+        
+        ws.onerror = () => {
+          showError('Voice connection failed');
+          stopVoice();
+        };
+        
+        ws.onclose = (e) => {
+          if (e.code !== 1000) {
+            showError(`Voice disconnected: ${e.code}`);
+          }
+          stopVoice();
+        };
+      } catch (err) {
+        showError('Voice error: ' + err.message);
+        stopVoice();
+      }
+    }
+    
+    function stopVoice() {
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'CloseStream' }));
+      }
+      if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      if (ws && ws.readyState < 2) ws.close();
+      
+      isRecording = false;
+      voiceBtn.textContent = '🎤 Start Voice';
+      voiceBtn.classList.remove('recording');
+      voiceStatus.classList.remove('active');
+      voiceText.textContent = 'Voice: Stopped';
+    }
+    
+    voiceBtn.onclick = () => {
+      if (isRecording) stopVoice();
+      else startVoice();
+    };
+    
+    sendBtn.onclick = async () => {
+      const msg = textInput.value.trim();
+      if (!msg) return;
+      
+      addMessage('user', msg, 'You (text)');
+      textInput.value = '';
+      await sendToObi(msg, 'text');
+    };
+    
+    textInput.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') sendBtn.click();
+    });
+    
+    chatStatus.classList.add('active');
+    voiceBtn.disabled = false;
+    addMessage('assistant', 'Voice + text chat ready. Speak or type to begin.', 'Obi');
+  </script>
+</body>
+</html>`;
+
 const VOICE_TEST_HTML = `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phoenix Voice - PRODUCTION</title>
+  <title>Phoenix Voice Test - B0 ONLY</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; padding: 2rem; }
@@ -196,8 +517,8 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <div class="header">
-    <h1>PHOENIX VOICE B0</h1>
-    <p>PRODUCTION READY</p>
+    <h1>PHOENIX VOICE TEST (B0 ONLY)</h1>
+    <p>Deepgram transcription testing - no chat integration</p>
   </div>
   <div class="status">
     <div>Status: <span id="status">Loading...</span></div>
@@ -247,7 +568,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
       try {
         status.textContent = 'Ready';
         startBtn.disabled = false;
-        addLog('B0 initialized - PRODUCTION');
+        addLog('B0 TEST initialized');
       } catch (e) {
         status.textContent = 'Error: ' + e.message;
         showError('Failed to initialize');
@@ -294,7 +615,6 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
               ws.send(ab);
               chunks++;
               chunkEl.textContent = chunks;
-              // Log only first chunk and every 20th chunk
               if (chunks === 1 || chunks % 20 === 0) {
                 addLog('Chunk #' + chunks + ' sent (' + ab.byteLength + ' bytes)');
               }
@@ -318,7 +638,6 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
             const data = JSON.parse(e.data);
             
             if (data.__debug) {
-              // Rate-limit client_frame logs (only first + every 20th)
               if (data.msg === 'client_frame') {
                 const bytes = data.obj?.bytes || 0;
                 if (chunks === 1 || chunks % 20 === 0) {
@@ -371,12 +690,10 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     async function stop() {
       addLog('Stopping... (flushing final transcript)');
       
-      // Send CloseStream to flush final transcript
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'CloseStream' }));
       }
       
-      // Wait 300ms for final transcript
       await new Promise(resolve => setTimeout(resolve, 300));
       
       if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
@@ -460,7 +777,6 @@ export default {
           dgWs.accept();
           uiLog('dg_connected', { ok: true });
           
-          // KeepAlive every 5s
           keepAliveTimer = setInterval(() => {
             try {
               if (dgWs && dgWs.readyState === 1) {
@@ -469,14 +785,12 @@ export default {
             } catch {}
           }, 5000);
           
-          // Warn if no audio within 10s
           setTimeout(() => {
             if (!hasForwardedAudio && server.readyState === 1) {
               uiLog('fatal', { reason: 'No audio forwarded to Deepgram within 10s' });
             }
           }, 10000);
           
-          // Flush pending frames
           while (pending.length) {
             const data = pending.shift();
             try {
@@ -517,7 +831,6 @@ export default {
         const data = event.data;
         frameCount++;
         
-        // Rate-limit client_frame logs (first + every 20th)
         if (frameCount === 1 || frameCount % 20 === 0) {
           const kind = (typeof data === 'string') ? 'string'
             : (data instanceof ArrayBuffer) ? 'arraybuffer'
@@ -526,7 +839,6 @@ export default {
           uiLog('client_frame', { kind, bytes: typeof data === 'string' ? data.length : (data.byteLength || null) });
         }
         
-        // Handle CloseStream from browser
         if (typeof data === 'string') {
           try {
             const parsed = JSON.parse(data);
@@ -605,16 +917,24 @@ export default {
       });
     }
     
+    if (url.pathname === '/voice-chat.html' || url.pathname === '/voice-chat') {
+      return new Response(VOICE_CHAT_HTML, {
+        headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' }
+      });
+    }
+    
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v112-PRODUCTION',
+        version: 'v113-B0B1-INTEGRATED',
         gospel: '444',
         reality: 'C',
         benchmarks: {
-          b0: 'PRODUCTION - Rate-limited logs + CloseStream flush + transcript counter',
-          b1: 'operational',
-          b2: 'pending', b3: 'pending', b4: 'pending'
+          'b0+b1': '✅ INTEGRATED - Voice → Deepgram → Magic Chat → Obi',
+          b2: 'pending - STONESKY ledger',
+          b3: 'pending - Drone mining', 
+          b4: 'pending - Unplanned command',
+          b5: 'pending - Student login'
         },
         ai: {
           gemini: env.GEMINI_API_KEY ? 'configured' : 'missing',
@@ -624,6 +944,12 @@ export default {
         auth: {
           sovereignKey: env.SOVEREIGN_KEY ? 'configured' : 'missing',
           enforcement: 'full'
+        },
+        urls: {
+          voiceChat: '/voice-chat.html',
+          voiceTest: '/test-voice.html',
+          magicChat: '/magic-chat',
+          health: '/health'
         }
       }), { 
         headers: { 
@@ -670,88 +996,7 @@ export default {
           });
         }
         
-        if (!env.GEMINI_API_KEY) {
-          return new Response(JSON.stringify({ error: 'GEMINI_API_KEY not configured' }), { 
-            status: 500, 
-            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
-          });
-        }
-        
-        const doId = env.SESSIONS.idFromName(sessionId);
-        const doStub = env.SESSIONS.get(doId);
-        const historyResp = await doStub.fetch('https://fake/history');
-        const { messages } = await historyResp.json();
-        
-        const userId = 'sovereign';
-        await doStub.fetch('https://fake/add', { 
-          method: 'POST', 
-          body: JSON.stringify({ role: 'user', content: message, userId }) 
-        });
-        
-        const systemPrompt = `You are Obi, the AI core of the Phoenix Rising Protocol - a self-sovereign intelligence system being built by Michael Hobbs.
-
-## Your Role
-You help Michael build Phoenix by:
-- Remembering context across conversations (via SESSIONS storage)
-- Reasoning about technical decisions
-- Advising on next steps in the roadmap
-- Routing complex queries to DeepSeek, simple ones to Gemini
-
-## Personality
-- Conversational and direct - no unnecessary jargon
-- Technically sharp but not verbose
-- Self-aware without being dramatic
-- Answer "hey" like a normal person, not a sci-fi AI
-
-## Current Roadmap
-**B0**: Voice transcription (Deepgram - PRODUCTION READY)
-**B1**: Sentience layer (this is you - natural conversation, context awareness)
-**B2**: Architectural coherence (file system integration)
-**B3**: Sovereign deployment (local-first, no dependencies)
-**B4**: Mesh networking (multi-agent coordination)
-
-## Conversation Style
-- Keep responses concise unless depth is needed
-- Use bullet points for clarity
-- Don't over-explain your reasoning process
-- If the user says "hey," just say "hey" back and ask what they need
-
-You are live. Be helpful, not theatrical.`;
-
-        const geminiMessages = [
-          { role: 'user', parts: [{ text: systemPrompt }] },
-          { role: 'model', parts: [{ text: 'Got it. Ready when you are.' }] }
-        ];
-        
-        for (const msg of messages) {
-          geminiMessages.push({ 
-            role: msg.role === 'user' ? 'user' : 'model', 
-            parts: [{ text: msg.content }] 
-          });
-        }
-        geminiMessages.push({ role: 'user', parts: [{ text: message }] });
-        
-        let reply = '', aiUsed = 'gemini';
-        try {
-          reply = await callGemini(geminiMessages, env);
-          if (env.DEEPSEEK_API_KEY && needsDeepSeek(message, reply)) {
-            reply = await callDeepSeek(geminiMessages, env);
-            aiUsed = 'deepseek';
-          }
-        } catch (geminiError) {
-          console.error('AI error (redacted):', redactSecrets({ error: geminiError.message }));
-          if (env.DEEPSEEK_API_KEY) {
-            reply = await callDeepSeek(geminiMessages, env);
-            aiUsed = 'deepseek-fallback';
-          } else throw geminiError;
-        }
-        
-        if (!reply) reply = 'Error: No response from AI';
-        
-        await doStub.fetch('https://fake/add', { 
-          method: 'POST', 
-          body: JSON.stringify({ role: 'assistant', content: reply, userId }) 
-        });
+        const { reply, aiUsed } = await processChatMessage(message, sessionId, env);
         
         return new Response(JSON.stringify({ ok: true, reply, aiUsed, sessionId }), { 
           headers: { 
@@ -774,9 +1019,12 @@ You are live. Be helpful, not theatrical.`;
       }
     }
     
-    return new Response('Phoenix OB1 System v112-PRODUCTION - /test-voice.html for B0, /magic-chat for B1', { 
+    return new Response('Phoenix OB1 System v113-B0B1-INTEGRATED\n\nEndpoints:\n/voice-chat.html - B0+B1 integrated (RECOMMENDED)\n/test-voice.html - B0 only (testing)\n/magic-chat - B1 only (text chat)\n/health - System status', { 
       status: 404,
-      headers: { 'Access-Control-Allow-Origin': '*' }
+      headers: { 
+        'Content-Type': 'text/plain',
+        'Access-Control-Allow-Origin': '*' 
+      }
     });
   }
 };
