@@ -1,5 +1,5 @@
-// reincarnate.js - Phoenix OB1 System v110.6-KEEPALIVE
-// B0: Deepgram voice transcription (working with keepalive)
+// reincarnate.js - Phoenix OB1 System v111-COMPLETE-FIX
+// B0: Deepgram voice transcription (binary frames + validation + UI logs)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
@@ -173,7 +173,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phoenix Voice - WORKING</title>
+  <title>Phoenix Voice - COMPLETE FIX</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; padding: 2rem; }
@@ -187,9 +187,9 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
     .box { background: rgba(168,85,247,0.05); border: 1px solid #a855f7; padding: 1.5rem; margin: 1rem 0; border-radius: 8px; min-height: 100px; }
     .box h3 { color: #f59e0b; margin-bottom: 1rem; }
-    .transcript { color: #a855f7; line-height: 1.6; font-size: 1.2rem; }
-    .interim { opacity: 0.6; font-style: italic; }
-    .final { opacity: 1; }
+    .transcript { color: #a855f7; line-height: 1.6; font-size: 1.2rem; word-wrap: break-word; }
+    .logs { font-size: 0.8rem; color: #10b981; max-height: 300px; overflow-y: auto; font-family: monospace; }
+    .log-line { margin: 2px 0; }
     .error { background: rgba(239,68,68,0.1); border-color: #ef4444; color: #ef4444; }
     .hidden { display: none; }
   </style>
@@ -197,7 +197,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 <body>
   <div class="header">
     <h1>PHOENIX VOICE B0</h1>
-    <p>Deepgram Live Transcription - WORKING</p>
+    <p>Complete Fix - Binary + Validation + Logs</p>
   </div>
   <div class="status">
     <div>Status: <span id="status">Loading...</span></div>
@@ -210,8 +210,12 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     <button id="stop" disabled>Stop</button>
   </div>
   <div class="box">
-    <h3>Live Transcription</h3>
+    <h3>Transcription</h3>
     <div id="transcript" class="transcript">Speak to see text...</div>
+  </div>
+  <div class="box">
+    <h3>Debug Logs</h3>
+    <div id="logs" class="logs">Logs will appear here...</div>
   </div>
   <script>
     let ws = null, mediaRec = null, stream = null, chunks = 0;
@@ -222,16 +226,27 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     const stopBtn = document.getElementById('stop');
     const transcript = document.getElementById('transcript');
     const errorBox = document.getElementById('error');
+    const logsDiv = document.getElementById('logs');
+    
+    function addLog(msg) {
+      const line = document.createElement('div');
+      line.className = 'log-line';
+      line.textContent = new Date().toLocaleTimeString() + ' ' + msg;
+      logsDiv.appendChild(line);
+      logsDiv.scrollTop = logsDiv.scrollHeight;
+    }
     
     function showError(msg) {
       errorBox.textContent = msg;
       errorBox.classList.remove('hidden');
+      addLog('ERROR: ' + msg);
     }
     
     async function init() {
       try {
         status.textContent = 'Ready';
         startBtn.disabled = false;
+        addLog('Initialized');
       } catch (e) {
         status.textContent = 'Error: ' + e.message;
         showError('Failed to initialize');
@@ -243,9 +258,11 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
       chunks = 0;
       chunkEl.textContent = '0';
       transcript.textContent = '';
+      logsDiv.innerHTML = '';
       
       try {
         status.textContent = 'Connecting...';
+        addLog('Connecting to Worker WS...');
         const wsUrl = location.protocol.replace('http', 'ws') + '//' + location.host + '/deepgram-ws';
         ws = new WebSocket(wsUrl);
         
@@ -253,18 +270,30 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
           dgStatus.textContent = 'Connected ✓';
           dgStatus.style.color = '#10b981';
           status.textContent = 'Getting microphone...';
+          addLog('WS connected to Worker');
           
           navigator.mediaDevices.getUserMedia({ audio: true }).then(s => {
             stream = s;
-            mediaRec = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+            addLog('Microphone accessed');
+            
+            // Force WebM/Opus
+            const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+              ? 'audio/webm;codecs=opus'
+              : 'audio/webm';
+            addLog('Using mimeType: ' + mimeType);
+            
+            mediaRec = new MediaRecorder(stream, { mimeType });
             
             mediaRec.ondataavailable = async (e) => {
-              if (e.data.size > 0 && ws?.readyState === 1) {
-                const arrayBuffer = await e.data.arrayBuffer();
-                ws.send(arrayBuffer);
-                chunks++;
-                chunkEl.textContent = chunks;
-              }
+              if (!e.data || e.data.size === 0) return;
+              if (!ws || ws.readyState !== WebSocket.OPEN) return;
+              
+              // CRITICAL: send binary bytes, not Blob
+              const ab = await e.data.arrayBuffer();
+              ws.send(ab);
+              chunks++;
+              chunkEl.textContent = chunks;
+              if (chunks === 1) addLog('First audio chunk sent (ArrayBuffer, ' + ab.byteLength + ' bytes)');
             };
             
             mediaRec.start(250);
@@ -272,6 +301,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
             startBtn.disabled = true;
             stopBtn.disabled = false;
             stopBtn.classList.add('recording');
+            addLog('MediaRecorder started (250ms chunks)');
           }).catch(err => {
             showError('Microphone error: ' + err.message);
             status.textContent = 'Mic failed';
@@ -282,16 +312,24 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
         ws.onmessage = (e) => {
           try {
             const data = JSON.parse(e.data);
+            
+            // Debug logs from Worker
+            if (data.__debug) {
+              addLog('Worker: ' + data.msg + ' ' + JSON.stringify(data.obj || ''));
+              return;
+            }
+            
+            // Deepgram transcript
             if (data.channel?.alternatives?.[0]?.transcript) {
               const txt = data.channel.alternatives[0].transcript;
               const isFinal = data.is_final || false;
               if (txt) {
                 transcript.textContent = txt;
-                transcript.className = isFinal ? 'transcript final' : 'transcript interim';
+                if (isFinal) addLog('Final: ' + txt);
               }
             }
           } catch (err) {
-            console.error('Parse error:', err);
+            addLog('Parse error: ' + err.message);
           }
         };
         
@@ -304,6 +342,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
         ws.onclose = (e) => {
           dgStatus.textContent = 'Closed: ' + e.code;
           dgStatus.style.color = '#a855f7';
+          addLog('WS closed: code=' + e.code + ' reason=' + (e.reason || 'none'));
           if (e.code !== 1000) {
             showError('Disconnected: code ' + e.code + (e.reason ? ' - ' + e.reason : ''));
           }
@@ -324,6 +363,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
       stopBtn.classList.remove('recording');
       status.textContent = 'Stopped';
       dgStatus.textContent = 'Disconnected';
+      addLog('Stopped');
     }
     
     startBtn.onclick = start;
@@ -354,6 +394,22 @@ export default {
       
       let dgWs = null;
       let keepAliveTimer = null;
+      let hasForwardedAudio = false;
+      const pending = [];
+      const MAX_PENDING = 32;
+      
+      function uiLog(msg, obj) {
+        try {
+          if (server.readyState === 1) {
+            server.send(JSON.stringify({ __debug: true, msg, obj }));
+          }
+        } catch {}
+      }
+      
+      function isBinary(data) {
+        return (data instanceof ArrayBuffer) ||
+          (data && data.buffer instanceof ArrayBuffer && typeof data.byteLength === 'number');
+      }
       
       (async () => {
         try {
@@ -364,6 +420,11 @@ export default {
             },
           });
           
+          const dgRequestId = dgResp.headers.get('dg-request-id') || dgResp.headers.get('DG-Request-Id');
+          const dgErrorHdr = dgResp.headers.get('dg-error') || dgResp.headers.get('DG-Error');
+          
+          uiLog('dg_upgrade', { status: dgResp.status, dgRequestId, dgErrorHdr });
+          
           if (dgResp.status !== 101) {
             server.close(1011, `Deepgram upgrade failed ${dgResp.status}`);
             return;
@@ -371,17 +432,42 @@ export default {
           
           dgWs = dgResp.webSocket;
           dgWs.accept();
+          uiLog('dg_connected', { ok: true });
           
-          // Send KeepAlive every 5 seconds to prevent idle timeout
+          // KeepAlive every 5s
           keepAliveTimer = setInterval(() => {
             try {
               if (dgWs && dgWs.readyState === 1) {
                 dgWs.send(JSON.stringify({ type: 'KeepAlive' }));
+                uiLog('dg_keepalive', { ok: true });
               }
             } catch (e) {
-              clearInterval(keepAliveTimer);
+              uiLog('dg_keepalive', { ok: false, err: String(e?.message || e) });
             }
           }, 5000);
+          
+          // Warn if no audio within 10s
+          setTimeout(() => {
+            if (!hasForwardedAudio && server.readyState === 1) {
+              uiLog('fatal', { reason: 'No audio forwarded to Deepgram within 10s. Check browser send is ArrayBuffer.' });
+            }
+          }, 10000);
+          
+          // Flush pending frames
+          while (pending.length) {
+            const data = pending.shift();
+            try {
+              dgWs.send(data);
+              if (!hasForwardedAudio) {
+                hasForwardedAudio = true;
+                uiLog('first_audio_forwarded', { ok: true });
+              }
+            } catch (e) {
+              uiLog('flush_error', { err: String(e?.message || e) });
+              server.close(1011, 'Deepgram send failed');
+              return;
+            }
+          }
           
           dgWs.addEventListener('message', (event) => {
             if (server.readyState === 1) {
@@ -389,28 +475,66 @@ export default {
             }
           });
           
-          dgWs.addEventListener('error', () => {
-            server.close(1011, 'Deepgram error');
+          dgWs.addEventListener('error', (e) => {
+            uiLog('dg_error', { err: String(e) });
+            try { server.close(1011, 'Deepgram error'); } catch {}
           });
           
           dgWs.addEventListener('close', (e) => {
-            clearInterval(keepAliveTimer);
-            server.close(e.code, e.reason || 'Deepgram closed');
+            uiLog('dg_close', { code: e.code, reason: e.reason });
+            try { server.close(e.code || 1011, e.reason || 'Deepgram closed'); } catch {}
           });
         } catch (err) {
+          uiLog('dg_connect_exception', { err: String(err?.message || err) });
           server.close(1011, 'Deepgram connect exception');
         }
       })();
       
       server.addEventListener('message', (event) => {
-        if (dgWs && dgWs.readyState === 1) {
-          dgWs.send(event.data);
+        const data = event.data;
+        
+        // Debug frame type to UI
+        const kind = (typeof data === 'string') ? 'string'
+          : (data instanceof ArrayBuffer) ? 'arraybuffer'
+          : (data && data.buffer instanceof ArrayBuffer) ? (data.constructor?.name || 'typedarray')
+          : typeof data;
+        
+        uiLog('client_frame', { kind, bytes: typeof data === 'string' ? data.length : (data.byteLength || null) });
+        
+        // HARD RULE: Deepgram audio must be binary
+        if (!isBinary(data)) {
+          uiLog('reject_nonbinary', { kind });
+          server.close(1003, 'Non-binary frame from browser (send ArrayBuffer, not Blob)');
+          return;
+        }
+        
+        // Convert TypedArray -> ArrayBuffer slice if needed
+        const payload = (data instanceof ArrayBuffer)
+          ? data
+          : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+        
+        if (!dgWs || dgWs.readyState !== 1) {
+          if (pending.length < MAX_PENDING) pending.push(payload);
+          else { pending.shift(); pending.push(payload); }
+          return;
+        }
+        
+        dgWs.send(payload);
+        if (!hasForwardedAudio) {
+          hasForwardedAudio = true;
+          uiLog('first_audio_forwarded', { ok: true });
         }
       });
       
-      server.addEventListener('close', () => {
-        clearInterval(keepAliveTimer);
-        if (dgWs && dgWs.readyState < 2) dgWs.close();
+      server.addEventListener('close', (e) => {
+        uiLog('client_close', { code: e.code, reason: e.reason });
+        try { clearInterval(keepAliveTimer); } catch {}
+        try {
+          if (dgWs && dgWs.readyState === 1) {
+            dgWs.send(JSON.stringify({ type: 'CloseStream' }));
+            dgWs.close(1000, 'Client closed');
+          }
+        } catch {}
       });
 
       return new Response(null, { status: 101, webSocket: client });
@@ -450,11 +574,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v110.6-KEEPALIVE',
+        version: 'v111-COMPLETE-FIX',
         gospel: '444',
         reality: 'C',
         benchmarks: {
-          b0: 'WORKING - KeepAlive enabled',
+          b0: 'COMPLETE - Binary frames + validation + UI logs',
           b1: 'operational',
           b2: 'pending', b3: 'pending', b4: 'pending'
         },
@@ -546,7 +670,7 @@ You help Michael build Phoenix by:
 - Answer "hey" like a normal person, not a sci-fi AI
 
 ## Current Roadmap
-**B0**: Voice transcription (Deepgram - WORKING with KeepAlive)
+**B0**: Voice transcription (Deepgram - COMPLETE FIX deployed)
 **B1**: Sentience layer (this is you - natural conversation, context awareness)
 **B2**: Architectural coherence (file system integration)
 **B3**: Sovereign deployment (local-first, no dependencies)
@@ -616,7 +740,7 @@ You are live. Be helpful, not theatrical.`;
       }
     }
     
-    return new Response('Phoenix OB1 System v110.6-KEEPALIVE - /test-voice.html for B0, /magic-chat for B1', { 
+    return new Response('Phoenix OB1 System v111-COMPLETE-FIX - /test-voice.html for B0, /magic-chat for B1', { 
       status: 404,
       headers: { 'Access-Control-Allow-Origin': '*' }
     });
