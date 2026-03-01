@@ -1,16 +1,14 @@
 {
   "name": "phoenix-ob1-system",
-  "version": "109.2.0",
-  "description": "OB(1) System - Unified Phoenix Protocol",
+  "version": "1.0.0",
+  "description": "Phoenix OB1 System - Reality-C | Gospel 444 | B0-B4 Benchmarks",
   "main": "reincarnate.js",
-  "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev",
-    "tail": "wrangler tail"
+    "dev": "wrangler dev"
   },
-  "keywords": ["phoenix", "protocol", "cloudflare", "workers", "durable-objects"],
-  "author": "mrmichaelhobbs1234-lang",
+  "keywords": ["phoenix", "cloudflare-workers", "gospel-444"],
+  "author": "mrmichaelhobbs1234",
   "license": "MIT",
   "devDependencies": {
     "wrangler": "^3.0.0"
