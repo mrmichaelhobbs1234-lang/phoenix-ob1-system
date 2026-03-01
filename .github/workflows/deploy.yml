@@ -19,25 +19,44 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Debug context
+        run: |
+          echo "📂 Working directory:"
+          pwd
+          echo ""
+          echo "📋 Files in root:"
+          ls -la
+          echo ""
+          echo "📄 wrangler.toml:"
+          cat wrangler.toml
+          echo ""
+          echo "📄 reincarnate.js (first 10 lines):"
+          head -n 10 reincarnate.js
+          echo ""
+          echo "✅ File verification complete"
+
       - name: Install Wrangler
         run: npm install -g wrangler
 
-      - name: Wrangler version check
+      - name: Wrangler version
         run: npx wrangler --version
 
-      - name: Deploy to Cloudflare Workers (verbose)
+      - name: Deploy to Cloudflare Workers
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
-          echo "🔍 Starting verbose deployment..."
+          echo "🔑 Secrets check:"
           echo "Account ID: ${CLOUDFLARE_ACCOUNT_ID:0:8}..."
-          echo "Token present: $([ -n "$CLOUDFLARE_API_TOKEN" ] && echo 'YES' || echo 'NO')"
-          npx wrangler deploy --log-level=debug
+          echo "Token present: $([ -n \"$CLOUDFLARE_API_TOKEN\" ] && echo 'YES' || echo 'NO')"
+          echo ""
+          echo "🚀 Deploying with explicit paths..."
+          npx wrangler deploy ./reincarnate.js --config ./wrangler.toml --log-level=debug
 
       - name: Deployment Summary
         run: |
           echo "✅ Phoenix OB1 System deployed successfully!"
-          echo "📦 Version: v1.6-AUTH-ENFORCED"
+          echo "📦 Version: v1.6.1-B0-DEPLOY"
           echo "🔗 Worker URL: https://phoenix-ob1-system.mrmichaelhobbs1234.workers.dev"
-          echo "🔐 Auth: ENFORCED (x-sovereign-key required)"
+          echo "🎯 B0: /test-voice.html"
+          echo "🗣️ B1: /magic-chat"
