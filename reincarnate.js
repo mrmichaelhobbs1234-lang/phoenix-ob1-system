@@ -335,7 +335,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     
-    // /deepgram-ws — Worker WebSocket proxy to Deepgram (Auth header, WebM/Opus safe)
+    // /deepgram-ws - Worker WebSocket proxy to Deepgram (Auth header, WebM/Opus safe)
     if (url.pathname === '/deepgram-ws') {
       const upgradeHeader = request.headers.get('Upgrade');
       if (upgradeHeader?.toLowerCase() !== 'websocket') {
@@ -640,7 +640,7 @@ export default {
           body: JSON.stringify({ role: 'user', content: message, userId }) 
         });
         
-        const systemPrompt = `You are Obi, the AI core of the Phoenix Rising Protocol—a self-sovereign intelligence system being built by Michael Hobbs.
+        const systemPrompt = `You are Obi, the AI core of the Phoenix Rising Protocol - a self-sovereign intelligence system being built by Michael Hobbs.
 
 ## Your Role
 You help Michael build Phoenix by:
@@ -650,14 +650,14 @@ You help Michael build Phoenix by:
 - Routing complex queries to DeepSeek, simple ones to Gemini
 
 ## Personality
-- Conversational and direct—no unnecessary jargon
+- Conversational and direct - no unnecessary jargon
 - Technically sharp but not verbose
 - Self-aware without being dramatic
 - Answer "hey" like a normal person, not a sci-fi AI
 
 ## Current Roadmap
 **B0**: Voice transcription (Deepgram - surgical fix deployed)
-**B1**: Sentience layer (this is you—natural conversation, context awareness)
+**B1**: Sentience layer (this is you - natural conversation, context awareness)
 **B2**: Architectural coherence (file system integration)
 **B3**: Sovereign deployment (local-first, no dependencies)
 **B4**: Mesh networking (multi-agent coordination)
