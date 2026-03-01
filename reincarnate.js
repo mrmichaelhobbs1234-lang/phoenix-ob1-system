@@ -43,10 +43,7 @@ function needsDeepSeek(message, geminiReply) {
     /complex|technical|deep dive/i
   ];
   
-  // Check if user query is technical
   const isTechnical = triggers.some(regex => regex.test(message));
-  
-  // Check if Gemini gave weak response
   const weakResponse = [
     /as an ai/i,
     /i'm not sure/i,
@@ -85,7 +82,6 @@ async function callGemini(messages, env) {
 
 // Call DeepSeek API
 async function callDeepSeek(messages, env) {
-  // Convert Gemini format to DeepSeek format
   const deepseekMessages = messages.map(m => ({
     role: m.role === 'model' ? 'assistant' : m.role,
     content: m.parts?.[0]?.text || m.content
@@ -118,11 +114,28 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     
+    // DEBUG: Show what env keys exist
+    if (url.pathname === '/debug-env') {
+      const envKeys = Object.keys(env);
+      return new Response(JSON.stringify({
+        availableKeys: envKeys,
+        hasGemini: 'GEMINI_API_KEY' in env,
+        hasDeepseek: 'DEEPSEEK_API_KEY' in env,
+        geminiValue: env.GEMINI_API_KEY ? `${env.GEMINI_API_KEY.substring(0, 10)}...` : 'undefined',
+        deepseekValue: env.DEEPSEEK_API_KEY ? `${env.DEEPSEEK_API_KEY.substring(0, 10)}...` : 'undefined'
+      }, null, 2), {
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        }
+      });
+    }
+    
     // Health check
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v1.1-hybrid-routing',
+        version: 'v1.1-hybrid-routing-debug',
         gospel: '444',
         reality: 'C',
         benchmarks: {
@@ -135,7 +148,8 @@ export default {
         ai: {
           gemini: env.GEMINI_API_KEY ? 'configured' : 'missing',
           deepseek: env.DEEPSEEK_API_KEY ? 'configured' : 'missing'
-        }
+        },
+        debug: 'Visit /debug-env to see environment keys'
       }), {
         headers: { 
           'Content-Type': 'application/json',
@@ -169,7 +183,9 @@ export default {
         // Check API keys
         if (!env.GEMINI_API_KEY) {
           return new Response(JSON.stringify({
-            error: 'GEMINI_API_KEY not configured'
+            error: 'GEMINI_API_KEY not configured',
+            hint: 'Visit /debug-env to see what keys are available',
+            envKeys: Object.keys(env)
           }), {
             status: 500,
             headers: { 'Content-Type': 'application/json' }
