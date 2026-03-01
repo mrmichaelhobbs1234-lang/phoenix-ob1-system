@@ -4,7 +4,7 @@
 
 ## Status
 
-- **B0** (Deepgram Voice): Pending
+- **B0** (Deepgram Voice): Testing
 - **B1** (Obi Sentience): Testing
 - **B2** (Ledger): Pending
 - **B3** (Drone Mining): Pending
@@ -14,6 +14,7 @@
 
 - **Worker**: Cloudflare Workers (phoenix-ob1-system)
 - **AI**: Gemini 2.0 Flash (free tier)
+- **Voice**: Deepgram WebSocket (nova-2)
 - **Memory**: SessionDO (Durable Objects)
 - **Deploy**: GitHub Actions auto-deploy on push
 
@@ -24,7 +25,11 @@
 - **Gold**: #f59e0b (imperial gold)
 - **NO BLUE**: Banned
 
-## Test B1
+## Test B0 (Voice)
+
+https://phoenix-ob1-system.mrmichaelhobbs1234.workers.dev/test-voice.html
+
+## Test B1 (Chat)
 
 https://phoenix-ob1-system.mrmichaelhobbs1234.workers.dev/magic-chat
 
