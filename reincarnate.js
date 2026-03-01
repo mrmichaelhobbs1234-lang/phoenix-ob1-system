@@ -1,4 +1,4 @@
-// reincarnate.js - Phoenix OB1 System v1.3
+// reincarnate.js - Phoenix OB1 System v1.3.1
 // B0: Deepgram voice transcription (browser direct)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
@@ -135,11 +135,15 @@ export default {
       });
     }
     
-    // B0: Voice test UI
+    // B0: Voice test UI - Force fresh fetch with cache-busting
     if (url.pathname === '/test-voice.html') {
-      const html = await fetch('https://raw.githubusercontent.com/mrmichaelhobbs1234-lang/phoenix-ob1-system/main/test-voice.html');
+      const cacheBuster = Date.now();
+      const html = await fetch(`https://raw.githubusercontent.com/mrmichaelhobbs1234-lang/phoenix-ob1-system/main/test-voice.html?v=${cacheBuster}`);
       return new Response(await html.text(), {
-        headers: { 'Content-Type': 'text/html' }
+        headers: { 
+          'Content-Type': 'text/html',
+          'Cache-Control': 'no-cache, no-store, must-revalidate'
+        }
       });
     }
     
@@ -166,7 +170,7 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v1.3-b0-auto-config',
+        version: 'v1.3.1-cache-busted',
         gospel: '444',
         reality: 'C',
         benchmarks: {
