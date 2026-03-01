@@ -1,5 +1,5 @@
-// reincarnate.js - Phoenix OB1 System v110.4-FIXED
-// B0: Deepgram voice transcription (WebSocket subprotocol auth)
+// reincarnate.js - Phoenix OB1 System v110.5-CORRECT-AUTH
+// B0: Deepgram voice transcription (fetch upgrade with model + headers)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
@@ -173,7 +173,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phoenix Voice - WORKING</title>
+  <title>Phoenix Voice - v110.5</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; padding: 2rem; }
@@ -195,8 +195,8 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <div class="header">
-    <h1>PHOENIX VOICE</h1>
-    <p>B0 - Deepgram Live Transcription</p>
+    <h1>PHOENIX VOICE v110.5</h1>
+    <p>Correct Auth - model + Upgrade header</p>
   </div>
   <div class="status">
     <div>Status: <span id="status">Loading...</span></div>
@@ -349,38 +349,64 @@ export default {
       server.accept();
 
       console.log('[WS] Client connected');
-      const deepgramUrl = 'wss://api.deepgram.com/v1/listen?smart_format=true&interim_results=true';
-      const deepgram = new WebSocket(deepgramUrl, ['token', env.DEEPGRAM_API_KEY]);
       
-      deepgram.addEventListener('open', () => {
-        console.log('[DG] Connected');
-      });
+      // model is REQUIRED by Deepgram for /v1/listen
+      const deepgramUrl = 'https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true';
+      
+      let dgWs = null;
+      (async () => {
+        try {
+          // fetch-upgrade requires Upgrade: websocket in Cloudflare Workers
+          const dgResp = await fetch(deepgramUrl, {
+            headers: {
+              'Upgrade': 'websocket',
+              'Authorization': `Token ${env.DEEPGRAM_API_KEY}`,
+            },
+          });
+          
+          console.log('[DG] Upgrade status:', dgResp.status);
+          
+          if (dgResp.status !== 101) {
+            const body = await dgResp.text().catch(() => '');
+            console.error('[DG] Upgrade failed:', dgResp.status, body);
+            server.close(1011, `Deepgram upgrade failed ${dgResp.status}`);
+            return;
+          }
+          
+          dgWs = dgResp.webSocket;
+          dgWs.accept();
+          console.log('[DG] Connected');
+          
+          dgWs.addEventListener('message', (event) => {
+            if (server.readyState === 1) {
+              server.send(event.data);
+            }
+          });
+          
+          dgWs.addEventListener('error', (e) => {
+            console.error('[DG] Error:', e);
+            server.close(1011, 'Deepgram error');
+          });
+          
+          dgWs.addEventListener('close', (e) => {
+            console.log('[DG] Closed:', e.code, e.reason);
+            server.close(e.code, e.reason || 'Deepgram closed');
+          });
+        } catch (err) {
+          console.error('[DG] Connect exception:', err?.message || err);
+          server.close(1011, 'Deepgram connect exception');
+        }
+      })();
       
       server.addEventListener('message', (event) => {
-        if (deepgram.readyState === 1) {
-          deepgram.send(event.data);
+        if (dgWs && dgWs.readyState === 1) {
+          dgWs.send(event.data);
         }
-      });
-      
-      deepgram.addEventListener('message', (event) => {
-        if (server.readyState === 1) {
-          server.send(event.data);
-        }
-      });
-      
-      deepgram.addEventListener('error', (e) => {
-        console.error('[DG] Error:', e);
-        server.close(1011, 'Deepgram error');
-      });
-      
-      deepgram.addEventListener('close', (e) => {
-        console.log('[DG] Closed:', e.code, e.reason);
-        server.close(e.code, e.reason || 'Deepgram closed');
       });
       
       server.addEventListener('close', () => {
         console.log('[WS] Client closed');
-        if (deepgram.readyState < 2) deepgram.close();
+        if (dgWs && dgWs.readyState < 2) dgWs.close();
       });
 
       return new Response(null, { status: 101, webSocket: client });
@@ -420,11 +446,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v110.4-FIXED',
+        version: 'v110.5-CORRECT-AUTH',
         gospel: '444',
         reality: 'C',
         benchmarks: {
-          b0: env.DEEPGRAM_API_KEY ? 'v110.4-SIMPLE-PROXY' : 'missing-key',
+          b0: env.DEEPGRAM_API_KEY ? 'v110.5-MODEL-UPGRADE-FIXED' : 'missing-key',
           b1: 'operational',
           b2: 'pending', b3: 'pending', b4: 'pending'
         },
@@ -516,7 +542,7 @@ You help Michael build Phoenix by:
 - Answer "hey" like a normal person, not a sci-fi AI
 
 ## Current Roadmap
-**B0**: Voice transcription (Deepgram working)
+**B0**: Voice transcription (Deepgram - auth fix applied)
 **B1**: Sentience layer (this is you - natural conversation, context awareness)
 **B2**: Architectural coherence (file system integration)
 **B3**: Sovereign deployment (local-first, no dependencies)
@@ -586,7 +612,7 @@ You are live. Be helpful, not theatrical.`;
       }
     }
     
-    return new Response('Phoenix OB1 System v110.4-FIXED - /test-voice.html for B0, /magic-chat for B1', { 
+    return new Response('Phoenix OB1 System v110.5-CORRECT-AUTH - /test-voice.html for B0, /magic-chat for B1', { 
       status: 404,
       headers: { 'Access-Control-Allow-Origin': '*' }
     });
