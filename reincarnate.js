@@ -1,5 +1,5 @@
-// reincarnate.js - Phoenix OB1 System v1.6.2-B0-FIXED
-// B0: Deepgram voice transcription (v108.2 ArrayBuffer fix restored)
+// reincarnate.js - Phoenix OB1 System v1.6.3-B0-DEBUG
+// B0: Deepgram voice transcription (base model, error logging)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
@@ -204,15 +204,16 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     .transcript-text { color: #a855f7; line-height: 1.6; font-size: 0.95rem; }
     .transcript-text.interim { opacity: 0.6; font-style: italic; }
     .obi-response { background: rgba(245, 158, 11, 0.1); border: 1px solid #f59e0b; color: #f59e0b; }
-    .error { background: rgba(239, 68, 68, 0.1); border: 1px solid #ef4444; color: #ef4444; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; width: 100%; max-width: 600px; }
+    .error { background: rgba(239, 68, 68, 0.1); border: 1px solid #ef4444; color: #ef4444; padding: 1rem; border-radius: 8px; margin-bottom: 1rem; width: 100%; max-width: 600px; font-size: 0.85rem; }
     .hidden { display: none; }
     .footer { margin-top: 2rem; text-align: center; color: rgba(168, 85, 247, 0.5); font-size: 0.8rem; }
+    .debug { background: rgba(168, 85, 247, 0.05); border: 1px solid #a855f7; border-radius: 8px; padding: 1rem; margin-top: 1rem; width: 100%; max-width: 600px; font-size: 0.75rem; font-family: monospace; color: #a855f7; max-height: 200px; overflow-y: auto; }
   </style>
 </head>
 <body>
   <div class="header">
     <h1>B0 VOICE TEST</h1>
-    <p>Phoenix OB1 System • Voice to Obi • v1.6.2-B0-FIXED</p>
+    <p>Phoenix OB1 System • Voice to Obi • v1.6.3-B0-DEBUG</p>
   </div>
   <div class="status">
     <div class="status-item"><span>Config:</span><span class="status-value" id="config-status">Loading...</span></div>
@@ -229,69 +230,84 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     <div class="transcript-box"><h3>Live Transcription (Deepgram)</h3><div id="transcript" class="transcript-text">Speak to see transcription...</div></div>
     <div class="transcript-box obi-response"><h3>Obi Response (B1)</h3><div id="obi-response" class="transcript-text">Waiting for voice input...</div></div>
   </div>
-  <div class="footer">Gospel 444 • Reality-C • v1.6.2-B0-FIXED<br>Browser → Deepgram (B0) → Worker /chat (B1)</div>
+  <div class="debug" id="debug-log">Debug log will appear here...</div>
+  <div class="footer">Gospel 444 • Reality-C • v1.6.3-B0-DEBUG<br>Browser → Deepgram (B0) → Worker /chat (B1)</div>
   <script>
     const workerUrl = window.location.origin;
     let deepgramApiKey = null, deepgramWs = null, mediaRecorder = null, audioStream = null;
     const configStatus = document.getElementById('config-status'), startBtn = document.getElementById('start-btn'), stopBtn = document.getElementById('stop-btn');
     const dgStatus = document.getElementById('dg-status'), micStatus = document.getElementById('mic-status'), obiStatus = document.getElementById('obi-status');
-    const transcriptEl = document.getElementById('transcript'), obiResponseEl = document.getElementById('obi-response'), errorBox = document.getElementById('error-box');
-    function showError(msg) { errorBox.textContent = msg; errorBox.classList.remove('hidden'); }
+    const transcriptEl = document.getElementById('transcript'), obiResponseEl = document.getElementById('obi-response'), errorBox = document.getElementById('error-box'), debugLog = document.getElementById('debug-log');
+    function log(msg) { const ts = new Date().toISOString().split('T')[1].split('.')[0]; debugLog.textContent += ts + ' ' + msg + '\n'; debugLog.scrollTop = debugLog.scrollHeight; console.log(msg); }
+    function showError(msg) { errorBox.textContent = msg; errorBox.classList.remove('hidden'); log('ERROR: ' + msg); }
     function hideError() { errorBox.classList.add('hidden'); }
     async function loadConfig() {
       try {
+        log('Fetching Deepgram key...');
         const res = await fetch(workerUrl + '/deepgram-key');
-        if (!res.ok) throw new Error('Failed to fetch key');
-        deepgramApiKey = (await res.json()).key;
+        if (!res.ok) throw new Error('Failed to fetch key: ' + res.status);
+        const data = await res.json();
+        deepgramApiKey = data.key;
+        log('Key loaded: ' + deepgramApiKey.substring(0, 10) + '...');
         configStatus.textContent = 'Ready'; configStatus.style.color = '#10b981'; startBtn.disabled = false;
-      } catch (err) { configStatus.textContent = 'Error'; configStatus.style.color = '#ef4444'; showError('Config load failed'); }
+      } catch (err) { configStatus.textContent = 'Error'; configStatus.style.color = '#ef4444'; showError('Config load failed: ' + err.message); }
     }
     async function startRecording() {
       hideError();
       if (!deepgramApiKey) { showError('Key not loaded'); return; }
       try {
+        log('Requesting microphone access...');
         audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
         micStatus.textContent = 'Active'; micStatus.style.color = '#10b981';
-        const dgUrl = "wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&token=" + deepgramApiKey;
+        log('Microphone active');
+        const dgUrl = "wss://api.deepgram.com/v1/listen?token=" + deepgramApiKey;
+        log('Connecting to: ' + dgUrl.replace(deepgramApiKey, 'KEY_REDACTED'));
         deepgramWs = new WebSocket(dgUrl);
-        deepgramWs.onopen = () => { dgStatus.textContent = 'Connected'; dgStatus.style.color = '#10b981'; };
+        deepgramWs.onopen = () => { dgStatus.textContent = 'Connected'; dgStatus.style.color = '#10b981'; log('Deepgram WebSocket OPENED'); };
         deepgramWs.onmessage = async (e) => {
           try {
             const data = JSON.parse(e.data);
+            log('DG message: ' + JSON.stringify(data).substring(0, 100));
             if (data.channel?.alternatives?.[0]?.transcript) {
               const txt = data.channel.alternatives[0].transcript, isFinal = data.is_final || false;
               transcriptEl.textContent = txt; transcriptEl.className = isFinal ? 'transcript-text' : 'transcript-text interim';
+              log((isFinal ? 'FINAL' : 'INTERIM') + ': ' + txt);
               if (isFinal && txt.trim()) {
                 obiStatus.textContent = 'Processing...'; obiStatus.style.color = '#f59e0b';
                 try {
                   const chatRes = await fetch(workerUrl + '/chat', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-sovereign-key': prompt('Enter sovereign key:') || '' }, body: JSON.stringify({ message: txt, sessionId: 'voice-session' }) });
-                  if (chatRes.ok) { const d = await chatRes.json(); obiResponseEl.textContent = d.reply; obiStatus.textContent = 'Ready (' + d.aiUsed + ')'; obiStatus.style.color = '#10b981'; }
-                  else { obiStatus.textContent = 'Error'; obiStatus.style.color = '#ef4444'; }
-                } catch { obiStatus.textContent = 'Error'; obiStatus.style.color = '#ef4444'; }
+                  if (chatRes.ok) { const d = await chatRes.json(); obiResponseEl.textContent = d.reply; obiStatus.textContent = 'Ready (' + d.aiUsed + ')'; obiStatus.style.color = '#10b981'; log('Obi replied: ' + d.reply.substring(0, 50)); }
+                  else { obiStatus.textContent = 'Error'; obiStatus.style.color = '#ef4444'; log('Obi error: ' + chatRes.status); }
+                } catch (e) { obiStatus.textContent = 'Error'; obiStatus.style.color = '#ef4444'; log('Obi fetch failed: ' + e.message); }
               }
             }
-          } catch (err) { console.error('Parse error:', err); }
+          } catch (err) { log('Parse error: ' + err.message); }
         };
-        deepgramWs.onerror = () => { showError('Deepgram connection failed'); dgStatus.textContent = 'Error'; dgStatus.style.color = '#ef4444'; };
-        deepgramWs.onclose = (e) => { dgStatus.textContent = 'Disconnected'; dgStatus.style.color = '#a855f7'; if (e.code !== 1000) showError('Disconnected: ' + e.code); };
+        deepgramWs.onerror = (e) => { showError('Deepgram connection failed'); dgStatus.textContent = 'Error'; dgStatus.style.color = '#ef4444'; log('WebSocket ERROR: ' + JSON.stringify(e)); };
+        deepgramWs.onclose = (e) => { dgStatus.textContent = 'Disconnected'; dgStatus.style.color = '#a855f7'; log('WebSocket CLOSED: code=' + e.code + ' reason=' + e.reason + ' clean=' + e.wasClean); if (e.code !== 1000) showError('Disconnected: code ' + e.code + (e.reason ? ' - ' + e.reason : '')); };
         mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
-        // FIX: Convert Blob to ArrayBuffer before sending to Deepgram (v108.2)
+        let chunkCount = 0;
         mediaRecorder.ondataavailable = async (e) => {
           if (e.data.size > 0 && deepgramWs?.readyState === 1) {
+            chunkCount++;
             const arrayBuffer = await e.data.arrayBuffer();
             deepgramWs.send(arrayBuffer);
+            if (chunkCount % 10 === 0) log('Sent ' + chunkCount + ' chunks');
           }
         };
         mediaRecorder.start(250);
+        log('MediaRecorder started (250ms chunks)');
         startBtn.disabled = true; stopBtn.disabled = false; stopBtn.classList.add('recording');
       } catch (err) { showError('Mic denied: ' + err.message); micStatus.textContent = 'Error'; micStatus.style.color = '#ef4444'; }
     }
     function stopRecording() {
+      log('Stopping recording...');
       if (mediaRecorder?.state === 'recording') mediaRecorder.stop();
       if (audioStream) { audioStream.getTracks().forEach(t => t.stop()); audioStream = null; }
       if (deepgramWs) { deepgramWs.close(); deepgramWs = null; }
       micStatus.textContent = 'Stopped'; micStatus.style.color = '#a855f7'; dgStatus.textContent = 'Disconnected'; dgStatus.style.color = '#a855f7';
       startBtn.disabled = false; stopBtn.disabled = true; stopBtn.classList.remove('recording');
+      log('Recording stopped');
     }
     startBtn.addEventListener('click', startRecording); stopBtn.addEventListener('click', stopRecording); loadConfig();
   </script>
@@ -353,11 +369,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v1.6.2-B0-FIXED',
+        version: 'v1.6.3-B0-DEBUG',
         gospel: '444',
         reality: 'C',
         benchmarks: {
-          b0: env.DEEPGRAM_API_KEY ? 'FIXED-v108.2' : 'missing-key',
+          b0: env.DEEPGRAM_API_KEY ? 'DEBUG-MODE' : 'missing-key',
           b1: 'operational',
           b2: 'pending', b3: 'pending', b4: 'pending'
         },
@@ -455,7 +471,7 @@ You help Michael build Phoenix by:
 - Answer "hey" like a normal person, not a sci-fi AI
 
 ## Current Roadmap
-**B0**: Voice transcription (Deepgram direct from browser - FIXED v108.2)
+**B0**: Voice transcription (Deepgram direct from browser - DEBUGGING)
 **B1**: Sentience layer (this is you—natural conversation, context awareness)
 **B2**: Architectural coherence (file system integration)
 **B3**: Sovereign deployment (local-first, no dependencies)
@@ -525,7 +541,7 @@ You are live. Be helpful, not theatrical.`;
       }
     }
     
-    return new Response('Phoenix OB1 System v1.6.2-B0-FIXED - /magic-chat for B1, /test-voice.html for B0, /api/authcheck for validation', { 
+    return new Response('Phoenix OB1 System v1.6.3-B0-DEBUG - /magic-chat for B1, /test-voice.html for B0, /api/authcheck for validation', { 
       status: 404,
       headers: { 'Access-Control-Allow-Origin': '*' }
     });
