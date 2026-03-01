@@ -1,5 +1,5 @@
-// reincarnate.js - Phoenix OB1 System v110.3-SURGICAL-FIX
-// B0: Deepgram voice transcription (correct auth + logging)
+// reincarnate.js - Phoenix OB1 System v110.4-FIXED
+// B0: Deepgram voice transcription (WebSocket subprotocol auth)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
@@ -173,7 +173,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phoenix Voice - v110.3 SURGICAL FIX</title>
+  <title>Phoenix Voice - WORKING</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; padding: 2rem; }
@@ -195,8 +195,8 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <div class="header">
-    <h1>PHOENIX VOICE v110.3</h1>
-    <p>Surgical Fix - Auth Header + Logging</p>
+    <h1>PHOENIX VOICE</h1>
+    <p>B0 - Deepgram Live Transcription</p>
   </div>
   <div class="status">
     <div>Status: <span id="status">Loading...</span></div>
@@ -335,7 +335,6 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     
-    // /deepgram-ws - Worker WebSocket proxy to Deepgram (Auth header, WebM/Opus safe)
     if (url.pathname === '/deepgram-ws') {
       const upgradeHeader = request.headers.get('Upgrade');
       if (upgradeHeader?.toLowerCase() !== 'websocket') {
@@ -349,178 +348,39 @@ export default {
       const [client, server] = Object.values(pair);
       server.accept();
 
-      const tClientAccepted = Date.now();
       console.log('[WS] Client connected');
-
-      const deepgramUrl = 'https://api.deepgram.com/v1/listen?smart_format=true&interim_results=true';
-
-      let dgRequestId = null;
-      let firstFrameLogged = false;
-      let tFirstAudioForwarded = null;
-      let tFirstTranscript = null;
-      let closing = false;
-
-      const pending = [];
-      const MAX_PENDING = 32;
-
-      function describeFrame(data) {
-        if (typeof data === 'string') return { kind: 'string', bytes: data.length };
-        if (data instanceof ArrayBuffer) return { kind: 'arraybuffer', bytes: data.byteLength };
-        if (data && data.buffer instanceof ArrayBuffer && typeof data.byteLength === 'number') {
-          return { kind: data.constructor?.name || 'typedarray', bytes: data.byteLength };
-        }
-        return { kind: typeof data, bytes: null };
-      }
-
-      function hexPrefixFromArrayBuffer(ab, n = 16) {
-        const u8 = new Uint8Array(ab.slice(0, n));
-        return Array.from(u8).map(b => b.toString(16).padStart(2, '0')).join(' ');
-      }
-
-      function safeCloseBoth(code = 1000, reason = '') {
-        if (closing) return;
-        closing = true;
-
-        try { server.close(code, reason); } catch {}
-        try { dgWs?.close(code, reason); } catch {}
-        try { clearInterval(keepAliveTimer); } catch {}
-      }
-
-      console.log('[DG] Connecting (fetch upgrade) to:', deepgramUrl);
-      console.log('[DG] API key length:', env.DEEPGRAM_API_KEY.length);
-      console.log('[DG] API key prefix:', env.DEEPGRAM_API_KEY.substring(0, 8) + '...');
-
-      let dgWs = null;
-      let keepAliveTimer = null;
-
-      (async () => {
-        try {
-          const dgResp = await fetch(deepgramUrl, {
-            method: 'GET',
-            headers: {
-              'Authorization': `Token ${env.DEEPGRAM_API_KEY}`,
-            },
-          });
-
-          dgRequestId = dgResp.headers.get('dg-request-id') || dgResp.headers.get('DG-Request-Id');
-          const dgErrorHdr = dgResp.headers.get('dg-error') || dgResp.headers.get('DG-Error');
-          console.log('[DG] Upgrade response status:', dgResp.status, 'dg-request-id:', dgRequestId, 'dg-error:', dgErrorHdr);
-
-          if (dgResp.status !== 101) {
-            const body = await dgResp.text().catch(() => '');
-            console.error('[DG] Upgrade failed:', dgResp.status, dgErrorHdr || body);
-            safeCloseBoth(1011, `Deepgram upgrade failed ${dgResp.status}`);
-            return;
-          }
-
-          dgWs = dgResp.webSocket;
-          dgWs.accept();
-
-          const tDgOpen = Date.now();
-          console.log('[DG] Connected successfully', dgRequestId ? `(dg-request-id=${dgRequestId})` : '');
-
-          keepAliveTimer = setInterval(() => {
-            try {
-              if (dgWs && dgWs.readyState === 1) {
-                dgWs.send(JSON.stringify({ type: 'KeepAlive' }));
-              }
-            } catch (e) {
-              console.error('[DG] KeepAlive send failed:', e?.message || e);
-            }
-          }, 10000);
-
-          while (pending.length) {
-            const data = pending.shift();
-            try {
-              dgWs.send(data);
-              if (!tFirstAudioForwarded) tFirstAudioForwarded = Date.now();
-            } catch (e) {
-              console.error('[DG] Failed flushing pending frame:', e?.message || e);
-              safeCloseBoth(1011, 'Deepgram send failed');
-              return;
-            }
-          }
-
-          dgWs.addEventListener('message', (event) => {
-            if (!tFirstTranscript) {
-              tFirstTranscript = Date.now();
-              console.log('[TIMER] First transcript/msg latency (ms):', tFirstTranscript - tDgOpen);
-            }
-
-            if (server.readyState === 1) {
-              server.send(event.data);
-            }
-          });
-
-          dgWs.addEventListener('close', (e) => {
-            console.log('[DG] Closed: code=', e.code, 'reason=', e.reason, dgRequestId ? `(dg-request-id=${dgRequestId})` : '');
-            safeCloseBoth(e.code || 1011, e.reason || 'Deepgram closed');
-          });
-
-          dgWs.addEventListener('error', (e) => {
-            console.error('[DG] Error event:', e, dgRequestId ? `(dg-request-id=${dgRequestId})` : '');
-            safeCloseBoth(1011, 'Deepgram error');
-          });
-        } catch (err) {
-          console.error('[DG] Connect exception:', err?.message || err);
-          safeCloseBoth(1011, 'Deepgram connect exception');
-        }
-      })();
-
+      const deepgramUrl = 'wss://api.deepgram.com/v1/listen?smart_format=true&interim_results=true';
+      const deepgram = new WebSocket(deepgramUrl, ['token', env.DEEPGRAM_API_KEY]);
+      
+      deepgram.addEventListener('open', () => {
+        console.log('[DG] Connected');
+      });
+      
       server.addEventListener('message', (event) => {
-        const data = event.data;
-
-        if (!firstFrameLogged) {
-          firstFrameLogged = true;
-          const frame = describeFrame(data);
-
-          let hex = null;
-          if (data instanceof ArrayBuffer) hex = hexPrefixFromArrayBuffer(data, 16);
-          else if (data && data.buffer instanceof ArrayBuffer) hex = hexPrefixFromArrayBuffer(data.buffer, 16);
-
-          console.log('[WS->DG] First frame type:', frame.kind, 'bytes:', frame.bytes, hex ? `hex[0..16]=${hex}` : '');
-          console.log('[TIMER] Client accepted -> first audio observed (ms):', Date.now() - tClientAccepted);
-        }
-
-        if (!dgWs || dgWs.readyState !== 1) {
-          if (pending.length < MAX_PENDING) {
-            pending.push(data);
-          } else {
-            pending.shift();
-            pending.push(data);
-          }
-          return;
-        }
-
-        try {
-          dgWs.send(data);
-          if (!tFirstAudioForwarded) {
-            tFirstAudioForwarded = Date.now();
-            console.log('[TIMER] Client accepted -> first audio forwarded to DG (ms):', tFirstAudioForwarded - tClientAccepted);
-          }
-        } catch (e) {
-          console.error('[DG] Send failed:', e?.message || e);
-          safeCloseBoth(1011, 'Deepgram send failed');
+        if (deepgram.readyState === 1) {
+          deepgram.send(event.data);
         }
       });
-
-      server.addEventListener('close', (e) => {
-        console.log('[WS] Client closed: code=', e.code, 'reason=', e.reason);
-        if (closing) return;
-        closing = true;
-
-        try { clearInterval(keepAliveTimer); } catch {}
-
-        try {
-          if (dgWs && dgWs.readyState === 1) {
-            dgWs.send(JSON.stringify({ type: 'CloseStream' }));
-          }
-        } catch {}
-        try {
-          if (dgWs && dgWs.readyState < 2) {
-            dgWs.close(1000, 'Client closed');
-          }
-        } catch {}
+      
+      deepgram.addEventListener('message', (event) => {
+        if (server.readyState === 1) {
+          server.send(event.data);
+        }
+      });
+      
+      deepgram.addEventListener('error', (e) => {
+        console.error('[DG] Error:', e);
+        server.close(1011, 'Deepgram error');
+      });
+      
+      deepgram.addEventListener('close', (e) => {
+        console.log('[DG] Closed:', e.code, e.reason);
+        server.close(e.code, e.reason || 'Deepgram closed');
+      });
+      
+      server.addEventListener('close', () => {
+        console.log('[WS] Client closed');
+        if (deepgram.readyState < 2) deepgram.close();
       });
 
       return new Response(null, { status: 101, webSocket: client });
@@ -560,11 +420,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v110.3-SURGICAL-FIX',
+        version: 'v110.4-FIXED',
         gospel: '444',
         reality: 'C',
         benchmarks: {
-          b0: env.DEEPGRAM_API_KEY ? 'v110.3-AUTH-FIXED' : 'missing-key',
+          b0: env.DEEPGRAM_API_KEY ? 'v110.4-SIMPLE-PROXY' : 'missing-key',
           b1: 'operational',
           b2: 'pending', b3: 'pending', b4: 'pending'
         },
@@ -656,7 +516,7 @@ You help Michael build Phoenix by:
 - Answer "hey" like a normal person, not a sci-fi AI
 
 ## Current Roadmap
-**B0**: Voice transcription (Deepgram - surgical fix deployed)
+**B0**: Voice transcription (Deepgram working)
 **B1**: Sentience layer (this is you - natural conversation, context awareness)
 **B2**: Architectural coherence (file system integration)
 **B3**: Sovereign deployment (local-first, no dependencies)
@@ -726,7 +586,7 @@ You are live. Be helpful, not theatrical.`;
       }
     }
     
-    return new Response('Phoenix OB1 System v110.3-SURGICAL-FIX - /test-voice.html for B0, /magic-chat for B1', { 
+    return new Response('Phoenix OB1 System v110.4-FIXED - /test-voice.html for B0, /magic-chat for B1', { 
       status: 404,
       headers: { 'Access-Control-Allow-Origin': '*' }
     });
