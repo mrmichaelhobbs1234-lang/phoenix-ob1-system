@@ -1,5 +1,5 @@
-// reincarnate.js - Phoenix OB1 System v1.2.2
-// B0: Deepgram voice transcription
+// reincarnate.js - Phoenix OB1 System v1.3
+// B0: Deepgram voice transcription (browser direct)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
@@ -115,114 +115,23 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     
-    // B0: Deepgram WebSocket transcription
-    if (url.pathname === '/transcribe') {
-      const upgradeHeader = request.headers.get('Upgrade');
-      if (!upgradeHeader || upgradeHeader !== 'websocket') {
-        return new Response('Expected WebSocket', { status: 426 });
-      }
-      
+    // B0: Return Deepgram API key for browser
+    if (url.pathname === '/deepgram-key') {
       if (!env.DEEPGRAM_API_KEY) {
-        return new Response('DEEPGRAM_API_KEY not configured', { status: 500 });
-      }
-      
-      const [client, server] = Object.values(new WebSocketPair());
-      server.accept();
-      
-      // Connect to Deepgram using fetch() for proper subprotocol support
-      const deepgramUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true`;
-      
-      try {
-        const deepgramResponse = await fetch(deepgramUrl, {
+        return new Response(JSON.stringify({ error: 'DEEPGRAM_API_KEY not configured' }), {
+          status: 500,
           headers: {
-            'Upgrade': 'websocket',
-            'Sec-WebSocket-Protocol': `token, ${env.DEEPGRAM_API_KEY}`
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
           }
         });
-        
-        const deepgramWs = deepgramResponse.webSocket;
-        if (!deepgramWs) {
-          server.send(JSON.stringify({ type: 'error', message: 'Failed to connect to Deepgram' }));
-          server.close();
-          return new Response(null, { status: 101, webSocket: client });
-        }
-        
-        deepgramWs.accept();
-        
-        deepgramWs.addEventListener('message', async (event) => {
-          try {
-            const data = JSON.parse(event.data);
-            
-            if (data.channel?.alternatives?.[0]?.transcript) {
-              const transcript = data.channel.alternatives[0].transcript;
-              const isFinal = data.is_final || false;
-              
-              server.send(JSON.stringify({
-                type: 'transcript',
-                text: transcript,
-                isFinal: isFinal
-              }));
-              
-              // If final, forward to B1
-              if (isFinal && transcript.trim().length > 0) {
-                try {
-                  const chatResponse = await fetch(`${url.origin}/chat`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      message: transcript,
-                      sessionId: 'voice-session'
-                    })
-                  });
-                  
-                  if (chatResponse.ok) {
-                    const chatData = await chatResponse.json();
-                    server.send(JSON.stringify({
-                      type: 'obi-response',
-                      text: chatData.reply,
-                      aiUsed: chatData.aiUsed
-                    }));
-                  }
-                } catch (err) {
-                  console.error('Chat forwarding error:', err);
-                }
-              }
-            }
-          } catch (err) {
-            console.error('Deepgram message error:', err);
-          }
-        });
-        
-        deepgramWs.addEventListener('error', (event) => {
-          console.error('Deepgram error:', event);
-          server.send(JSON.stringify({ type: 'error', message: 'Deepgram connection error' }));
-        });
-        
-        deepgramWs.addEventListener('close', () => {
-          server.close();
-        });
-        
-        server.addEventListener('message', (event) => {
-          if (deepgramWs.readyState === 1) {
-            deepgramWs.send(event.data);
-          }
-        });
-        
-        server.addEventListener('close', () => {
-          deepgramWs.close();
-        });
-        
-        server.send(JSON.stringify({ type: 'status', message: 'Connected to Deepgram' }));
-        
-      } catch (err) {
-        console.error('Deepgram connection error:', err);
-        server.send(JSON.stringify({ type: 'error', message: `Connection failed: ${err.message}` }));
-        server.close();
       }
       
-      return new Response(null, {
-        status: 101,
-        webSocket: client
+      return new Response(JSON.stringify({ key: env.DEEPGRAM_API_KEY }), {
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*'
+        }
       });
     }
     
@@ -257,7 +166,7 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v1.2.2-b0-fetch-upgrade',
+        version: 'v1.3-b0-auto-config',
         gospel: '444',
         reality: 'C',
         benchmarks: {
@@ -273,7 +182,7 @@ export default {
           deepgram: env.DEEPGRAM_API_KEY ? 'configured' : 'missing'
         },
         endpoints: {
-          transcribe: '/transcribe (WebSocket)',
+          deepgramKey: '/deepgram-key (GET)',
           chat: '/chat (POST)',
           magicChat: '/magic-chat (UI)',
           testVoice: '/test-voice.html (UI)'
@@ -352,7 +261,7 @@ You help Michael build Phoenix by:
 - Answer "hey" like a normal person, not a sci-fi AI
 
 ## Current Roadmap
-**B0**: Voice transcription (Deepgram WebSocket - LIVE)
+**B0**: Voice transcription (Deepgram direct from browser - LIVE)
 **B1**: Sentience layer (this is you—natural conversation, context awareness)
 **B2**: Architectural coherence (file system integration)
 **B3**: Sovereign deployment (local-first, no dependencies)
