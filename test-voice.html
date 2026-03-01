@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>B0 Voice Test - Phoenix OB1</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'SF Mono', 'Monaco', 'Courier New', monospace;
+      background: #0f0f1a;
+      color: #a855f7;
+      min-height: 100vh;
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .header {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+
+    .header h1 {
+      font-size: 2rem;
+      color: #f59e0b;
+      margin-bottom: 0.5rem;
+    }
+
+    .header p {
+      color: #a855f7;
+      font-size: 0.9rem;
+    }
+
+    .status {
+      background: rgba(168, 85, 247, 0.1);
+      border: 1px solid #a855f7;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+      width: 100%;
+      max-width: 600px;
+    }
+
+    .status-item {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 0.5rem;
+      font-size: 0.85rem;
+    }
+
+    .status-item:last-child {
+      margin-bottom: 0;
+    }
+
+    .status-value {
+      color: #f59e0b;
+      font-weight: bold;
+    }
+
+    .controls {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+
+    button {
+      background: #a855f7;
+      color: #0f0f1a;
+      border: none;
+      border-radius: 6px;
+      padding: 1rem 2rem;
+      font-size: 1rem;
+      font-weight: bold;
+      cursor: pointer;
+      font-family: inherit;
+      transition: all 0.2s;
+    }
+
+    button:hover {
+      background: #f59e0b;
+      transform: translateY(-2px);
+    }
+
+    button:disabled {
+      background: rgba(168, 85, 247, 0.3);
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    button.recording {
+      background: #ef4444;
+      animation: pulse 1.5s infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.7; }
+    }
+
+    .transcripts {
+      width: 100%;
+      max-width: 600px;
+    }
+
+    .transcript-box {
+      background: rgba(168, 85, 247, 0.05);
+      border: 1px solid #a855f7;
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin-bottom: 1rem;
+      min-height: 100px;
+    }
+
+    .transcript-box h3 {
+      color: #f59e0b;
+      font-size: 0.9rem;
+      margin-bottom: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .transcript-text {
+      color: #a855f7;
+      line-height: 1.6;
+      font-size: 0.95rem;
+    }
+
+    .transcript-text.interim {
+      opacity: 0.6;
+      font-style: italic;
+    }
+
+    .obi-response {
+      background: rgba(245, 158, 11, 0.1);
+      border: 1px solid #f59e0b;
+      color: #f59e0b;
+    }
+
+    .error {
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid #ef4444;
+      color: #ef4444;
+      padding: 1rem;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      width: 100%;
+      max-width: 600px;
+    }
+
+    .hidden {
+      display: none;
+    }
+
+    .footer {
+      margin-top: 2rem;
+      text-align: center;
+      color: rgba(168, 85, 247, 0.5);
+      font-size: 0.8rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>B0 VOICE TEST</h1>
+    <p>Phoenix OB1 System • Deepgram WebSocket Transcription</p>
+  </div>
+
+  <div class="status">
+    <div class="status-item">
+      <span>Worker:</span>
+      <span class="status-value" id="worker-url">Loading...</span>
+    </div>
+    <div class="status-item">
+      <span>WebSocket:</span>
+      <span class="status-value" id="ws-status">Disconnected</span>
+    </div>
+    <div class="status-item">
+      <span>Microphone:</span>
+      <span class="status-value" id="mic-status">Not started</span>
+    </div>
+  </div>
+
+  <div id="error-box" class="error hidden"></div>
+
+  <div class="controls">
+    <button id="start-btn">Start Recording</button>
+    <button id="stop-btn" disabled>Stop Recording</button>
+  </div>
+
+  <div class="transcripts">
+    <div class="transcript-box">
+      <h3>Live Transcription</h3>
+      <div id="transcript" class="transcript-text">Speak to see transcription...</div>
+    </div>
+
+    <div class="transcript-box obi-response">
+      <h3>Obi Response</h3>
+      <div id="obi-response" class="transcript-text">Waiting for voice input...</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    Gospel 444 • Reality-C • Agent 99
+  </div>
+
+  <script>
+    const workerUrl = window.location.origin;
+    document.getElementById('worker-url').textContent = workerUrl;
+
+    let ws = null;
+    let mediaRecorder = null;
+    let audioStream = null;
+
+    const startBtn = document.getElementById('start-btn');
+    const stopBtn = document.getElementById('stop-btn');
+    const wsStatus = document.getElementById('ws-status');
+    const micStatus = document.getElementById('mic-status');
+    const transcriptEl = document.getElementById('transcript');
+    const obiResponseEl = document.getElementById('obi-response');
+    const errorBox = document.getElementById('error-box');
+
+    function showError(message) {
+      errorBox.textContent = message;
+      errorBox.classList.remove('hidden');
+    }
+
+    function hideError() {
+      errorBox.classList.add('hidden');
+    }
+
+    async function startRecording() {
+      hideError();
+
+      try {
+        // Get microphone access
+        audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micStatus.textContent = 'Active';
+        micStatus.style.color = '#10b981';
+
+        // Connect WebSocket
+        const wsUrl = workerUrl.replace('http', 'ws') + '/transcribe';
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          wsStatus.textContent = 'Connected';
+          wsStatus.style.color = '#10b981';
+          console.log('WebSocket connected');
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+
+            if (data.type === 'transcript') {
+              transcriptEl.textContent = data.text;
+              transcriptEl.className = data.isFinal ? 'transcript-text' : 'transcript-text interim';
+            }
+
+            if (data.type === 'obi-response') {
+              obiResponseEl.textContent = data.text;
+              obiResponseEl.style.opacity = '1';
+            }
+
+            if (data.type === 'error') {
+              showError('Deepgram error: ' + data.message);
+            }
+
+            if (data.type === 'status') {
+              console.log('Status:', data.message);
+            }
+          } catch (err) {
+            console.error('Message parse error:', err);
+          }
+        };
+
+        ws.onerror = (error) => {
+          console.error('WebSocket error:', error);
+          showError('WebSocket connection failed');
+          wsStatus.textContent = 'Error';
+          wsStatus.style.color = '#ef4444';
+        };
+
+        ws.onclose = () => {
+          wsStatus.textContent = 'Disconnected';
+          wsStatus.style.color = '#a855f7';
+          console.log('WebSocket closed');
+        };
+
+        // Setup MediaRecorder to send audio chunks
+        mediaRecorder = new MediaRecorder(audioStream, {
+          mimeType: 'audio/webm'
+        });
+
+        mediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0 && ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(event.data);
+          }
+        };
+
+        mediaRecorder.start(250); // Send chunks every 250ms
+
+        startBtn.disabled = true;
+        stopBtn.disabled = false;
+        startBtn.classList.remove('recording');
+        stopBtn.classList.add('recording');
+
+      } catch (err) {
+        showError('Microphone access denied or not available: ' + err.message);
+        micStatus.textContent = 'Error';
+        micStatus.style.color = '#ef4444';
+      }
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+      }
+
+      if (audioStream) {
+        audioStream.getTracks().forEach(track => track.stop());
+        audioStream = null;
+      }
+
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+
+      micStatus.textContent = 'Stopped';
+      micStatus.style.color = '#a855f7';
+      wsStatus.textContent = 'Disconnected';
+      wsStatus.style.color = '#a855f7';
+
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      startBtn.classList.remove('recording');
+      stopBtn.classList.remove('recording');
+    }
+
+    startBtn.addEventListener('click', startRecording);
+    stopBtn.addEventListener('click', stopRecording);
+  </script>
+</body>
+</html>
