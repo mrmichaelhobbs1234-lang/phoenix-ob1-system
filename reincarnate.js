@@ -1,4 +1,4 @@
-// reincarnate.js - Phoenix OB1 System v1.6.1-B0-FIX
+// reincarnate.js - Phoenix OB1 System v1.6.1-B0-DEPLOY
 // B0: Deepgram voice transcription (browser direct)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
@@ -212,7 +212,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 <body>
   <div class="header">
     <h1>B0 VOICE TEST</h1>
-    <p>Phoenix OB1 System • Voice to Obi • v1.6.1-B0-FIX</p>
+    <p>Phoenix OB1 System • Voice to Obi • v1.6.1-B0-DEPLOY</p>
   </div>
   <div class="status">
     <div class="status-item"><span>Config:</span><span class="status-value" id="config-status">Loading...</span></div>
@@ -229,7 +229,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     <div class="transcript-box"><h3>Live Transcription (Deepgram)</h3><div id="transcript" class="transcript-text">Speak to see transcription...</div></div>
     <div class="transcript-box obi-response"><h3>Obi Response (B1)</h3><div id="obi-response" class="transcript-text">Waiting for voice input...</div></div>
   </div>
-  <div class="footer">Gospel 444 • Reality-C • v1.6.1-B0-FIX<br>Browser → Deepgram (B0) → Worker /chat (B1)</div>
+  <div class="footer">Gospel 444 • Reality-C • v1.6.1-B0-DEPLOY<br>Browser → Deepgram (B0) → Worker /chat (B1)</div>
   <script>
     const workerUrl = window.location.origin;
     let deepgramApiKey = null, deepgramWs = null, mediaRecorder = null, audioStream = null;
@@ -347,7 +347,7 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v1.6.1-B0-FIX',
+        version: 'v1.6.1-B0-DEPLOY',
         gospel: '444',
         reality: 'C',
         benchmarks: {
@@ -519,7 +519,7 @@ You are live. Be helpful, not theatrical.`;
       }
     }
     
-    return new Response('Phoenix OB1 System v1.6.1-B0-FIX - /magic-chat for B1, /test-voice.html for B0, /api/authcheck for validation', { 
+    return new Response('Phoenix OB1 System v1.6.1-B0-DEPLOY - /magic-chat for B1, /test-voice.html for B0, /api/authcheck for validation', { 
       status: 404,
       headers: { 'Access-Control-Allow-Origin': '*' }
     });
