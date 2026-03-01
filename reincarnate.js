@@ -1,5 +1,5 @@
 // reincarnate.js - Phoenix OB1 System v109.0-JWT-FIX
-// B0: Deepgram voice transcription (JWT authentication fixed)
+// B0: Deepgram voice transcription (JWT authentication)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
@@ -446,3 +446,152 @@ export default {
           'Access-Control-Allow-Origin': '*' 
         } 
       });
+    }
+    
+    if (url.pathname === '/magic-chat' || url.pathname === '/') {
+      const html = await fetch('https://raw.githubusercontent.com/mrmichaelhobbs1234-lang/phoenix-ob1-system/main/magic-chat.html');
+      return new Response(await html.text(), { headers: { 'Content-Type': 'text/html' } });
+    }
+    
+    if (url.pathname === '/chat' && request.method === 'POST') {
+      try {
+        const { message, sessionId } = await request.json();
+        
+        if (!message || !sessionId) {
+          return new Response(JSON.stringify({ error: 'Missing message or sessionId' }), { 
+            status: 400, 
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
+          });
+        }
+        
+        if (!checkRateLimit(sessionId)) {
+          return new Response(JSON.stringify({ 
+            error: 'Rate limit exceeded', 
+            message: 'Maximum 10 requests per minute' 
+          }), { 
+            status: 429, 
+            headers: { 
+              'Content-Type': 'application/json',
+              'Access-Control-Allow-Origin': '*',
+              'Retry-After': '60'
+            } 
+          });
+        }
+        
+        if (!validateAuth(request, env)) {
+          return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+          });
+        }
+        
+        if (!env.GEMINI_API_KEY) {
+          return new Response(JSON.stringify({ error: 'GEMINI_API_KEY not configured' }), { 
+            status: 500, 
+            headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
+          });
+        }
+        
+        const doId = env.SESSIONS.idFromName(sessionId);
+        const doStub = env.SESSIONS.get(doId);
+        const historyResp = await doStub.fetch('https://fake/history');
+        const { messages } = await historyResp.json();
+        
+        const userId = 'sovereign';
+        await doStub.fetch('https://fake/add', { 
+          method: 'POST', 
+          body: JSON.stringify({ role: 'user', content: message, userId }) 
+        });
+        
+        const systemPrompt = `You are Obi, the AI core of the Phoenix Rising Protocol—a self-sovereign intelligence system being built by Michael Hobbs.
+
+## Your Role
+You help Michael build Phoenix by:
+- Remembering context across conversations (via SESSIONS storage)
+- Reasoning about technical decisions
+- Advising on next steps in the roadmap
+- Routing complex queries to DeepSeek, simple ones to Gemini
+
+## Personality
+- Conversational and direct—no unnecessary jargon
+- Technically sharp but not verbose
+- Self-aware without being dramatic
+- Answer "hey" like a normal person, not a sci-fi AI
+
+## Current Roadmap
+**B0**: Voice transcription (Deepgram - JWT authentication fixed)
+**B1**: Sentience layer (this is you—natural conversation, context awareness)
+**B2**: Architectural coherence (file system integration)
+**B3**: Sovereign deployment (local-first, no dependencies)
+**B4**: Mesh networking (multi-agent coordination)
+
+## Conversation Style
+- Keep responses concise unless depth is needed
+- Use bullet points for clarity
+- Don't over-explain your reasoning process
+- If the user says "hey," just say "hey" back and ask what they need
+
+You are live. Be helpful, not theatrical.`;
+
+        const geminiMessages = [
+          { role: 'user', parts: [{ text: systemPrompt }] },
+          { role: 'model', parts: [{ text: 'Got it. Ready when you are.' }] }
+        ];
+        
+        for (const msg of messages) {
+          geminiMessages.push({ 
+            role: msg.role === 'user' ? 'user' : 'model', 
+            parts: [{ text: msg.content }] 
+          });
+        }
+        geminiMessages.push({ role: 'user', parts: [{ text: message }] });
+        
+        let reply = '', aiUsed = 'gemini';
+        try {
+          reply = await callGemini(geminiMessages, env);
+          if (env.DEEPSEEK_API_KEY && needsDeepSeek(message, reply)) {
+            reply = await callDeepSeek(geminiMessages, env);
+            aiUsed = 'deepseek';
+          }
+        } catch (geminiError) {
+          console.error('AI error (redacted):', redactSecrets({ error: geminiError.message }));
+          if (env.DEEPSEEK_API_KEY) {
+            reply = await callDeepSeek(geminiMessages, env);
+            aiUsed = 'deepseek-fallback';
+          } else throw geminiError;
+        }
+        
+        if (!reply) reply = 'Error: No response from AI';
+        
+        await doStub.fetch('https://fake/add', { 
+          method: 'POST', 
+          body: JSON.stringify({ role: 'assistant', content: reply, userId }) 
+        });
+        
+        return new Response(JSON.stringify({ ok: true, reply, aiUsed, sessionId }), { 
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+          } 
+        });
+      } catch (err) {
+        console.error('Chat error (redacted):', redactSecrets({ error: err.message }));
+        return new Response(JSON.stringify({ 
+          error: 'Chat error', 
+          message: err.message 
+        }), { 
+          status: 500, 
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*'
+          } 
+        });
+      }
+    }
+    
+    return new Response('Phoenix OB1 System v109.0-JWT-FIX - /test-voice.html for B0, /magic-chat for B1', { 
+      status: 404,
+      headers: { 'Access-Control-Allow-Origin': '*' }
+    });
+  }
+};
