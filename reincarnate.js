@@ -1,5 +1,6 @@
-// reincarnate.js - Phoenix OB1 System v113-B0B1-INTEGRATED
+// reincarnate.js - Phoenix OB1 System v114-B2-STONESKY
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
+// B2: STONESKY Merkle ledger verification (LIVE)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
 
@@ -56,6 +57,14 @@ function redactSecrets(obj) {
   return redacted;
 }
 
+async function sha256(data) {
+  const encoder = new TextEncoder();
+  const dataBuffer = encoder.encode(data);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', dataBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
 export class SessionDO {
   constructor(state, env) {
     this.state = state;
@@ -72,20 +81,74 @@ export class SessionDO {
       });
     }
     
+    if (url.pathname === '/verify') {
+      const messages = await this.state.storage.get('messages') || [];
+      const ledger = await this.state.storage.get('ledger') || [];
+      
+      let valid = true;
+      let invalidIndex = -1;
+      
+      for (let i = 0; i < ledger.length; i++) {
+        const entry = ledger[i];
+        const prevHash = i === 0 ? '0' : ledger[i - 1].hash;
+        const data = prevHash + entry.role + entry.content + entry.timestamp;
+        const expectedHash = await sha256(data);
+        
+        if (entry.hash !== expectedHash) {
+          valid = false;
+          invalidIndex = i;
+          break;
+        }
+      }
+      
+      return new Response(JSON.stringify({
+        valid: valid,
+        ledgerLength: ledger.length,
+        messagesLength: messages.length,
+        invalidIndex: invalidIndex,
+        status: valid ? 'VERIFIED' : 'TAMPERED'
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
     if (url.pathname === '/add' && request.method === 'POST') {
       const { role, content, userId } = await request.json();
       const messages = await this.state.storage.get('messages') || [];
+      const ledger = await this.state.storage.get('ledger') || [];
+      
+      const timestamp = new Date().toISOString();
+      const prevHash = ledger.length === 0 ? '0' : ledger[ledger.length - 1].hash;
+      const data = prevHash + role + content + timestamp;
+      const hash = await sha256(data);
       
       messages.push({ 
         role, 
         content, 
         userId: userId || 'anonymous',
-        timestamp: new Date().toISOString() 
+        timestamp: timestamp
       });
       
-      const trimmed = messages.slice(-50);
-      await this.state.storage.put('messages', trimmed);
-      return new Response(JSON.stringify({ ok: true, count: trimmed.length }), {
+      ledger.push({
+        role: role,
+        content: content,
+        timestamp: timestamp,
+        hash: hash,
+        prevHash: prevHash
+      });
+      
+      const trimmedMessages = messages.slice(-50);
+      const trimmedLedger = ledger.slice(-50);
+      
+      await this.state.storage.put('messages', trimmedMessages);
+      await this.state.storage.put('ledger', trimmedLedger);
+      
+      return new Response(JSON.stringify({ 
+        ok: true, 
+        count: trimmedMessages.length,
+        hash: hash,
+        ledgerSize: trimmedLedger.length
+      }), {
         headers: { 'Content-Type': 'application/json' }
       });
     }
@@ -191,7 +254,7 @@ async function processChatMessage(message, sessionId, env) {
     body: JSON.stringify({ role: 'user', content: message, userId }) 
   });
   
-  const systemPrompt = 'You are Obi, the AI core of the Phoenix Rising Protocol - a self-sovereign intelligence system being built by Michael Hobbs.\n\n## Your Role\nYou help Michael build Phoenix by:\n- Remembering context across conversations (via SESSIONS storage)\n- Reasoning about technical decisions\n- Advising on next steps in the roadmap\n- Routing complex queries to DeepSeek, simple ones to Gemini\n- **Responding to voice commands** when user speaks via Deepgram\n\n## Personality\n- Conversational and direct - no unnecessary jargon\n- Technically sharp but not verbose\n- Self-aware without being dramatic\n- Answer "hey" like a normal person, not a sci-fi AI\n- When responding to voice input, acknowledge naturally ("Got it", "Understood", etc.)\n\n## Current Roadmap\n**B0+B1 INTEGRATED**: Voice → Deepgram → You → Response (LIVE NOW)\n**B2**: Ledger STONESKY verification\n**B3**: Drone Mining from 500 chat logs\n**B4**: Unplanned Command execution\n**B5**: Student Login system\n\n## Conversation Style\n- Keep responses concise unless depth is needed\n- Use bullet points for clarity\n- Don\'t over-explain your reasoning process\n- If the user says "hey," just say "hey" back and ask what they need\n\nYou are live. Be helpful, not theatrical.';
+  const systemPrompt = 'You are Obi, the AI core of the Phoenix Rising Protocol - a self-sovereign intelligence system being built by Michael Hobbs.\n\n## Your Role\nYou help Michael build Phoenix by:\n- Remembering context across conversations (via SESSIONS storage)\n- Reasoning about technical decisions\n- Advising on next steps in the roadmap\n- Routing complex queries to DeepSeek, simple ones to Gemini\n- **Responding to voice commands** when user speaks via Deepgram\n- **Verifying conversation integrity** via STONESKY Merkle ledger\n\n## Personality\n- Conversational and direct - no unnecessary jargon\n- Technically sharp but not verbose\n- Self-aware without being dramatic\n- Answer "hey" like a normal person, not a sci-fi AI\n- When responding to voice input, acknowledge naturally ("Got it", "Understood", etc.)\n\n## Current Roadmap\n**B0+B1 INTEGRATED**: Voice → Deepgram → You → Response (LIVE)\n**B2 LIVE**: STONESKY Merkle ledger verification\n**B3**: Drone Mining from 500 chat logs\n**B4**: Unplanned Command execution\n**B5**: Student Login system\n\n## Conversation Style\n- Keep responses concise unless depth is needed\n- Use bullet points for clarity\n- Don\'t over-explain your reasoning process\n- If the user says "hey," just say "hey" back and ask what they need\n\nYou are live. Be helpful, not theatrical.';
 
   const geminiMessages = [
     { role: 'user', parts: [{ text: systemPrompt }] },
@@ -231,13 +294,32 @@ async function processChatMessage(message, sessionId, env) {
   return { reply, aiUsed };
 }
 
-const VOICE_CHAT_HTML = '<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>Phoenix Voice Chat - B0+B1 INTEGRATED</title>\n  <style>\n    * { margin: 0; padding: 0; box-sizing: border-box; }\n    body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; display: flex; flex-direction: column; }\n    .header { text-align: center; padding: 2rem; border-bottom: 2px solid #a855f7; }\n    h1 { color: #f59e0b; margin-bottom: 0.5rem; }\n    .subtitle { color: #10b981; font-size: 0.9rem; }\n    .status-bar { background: rgba(168,85,247,0.1); border-bottom: 1px solid #a855f7; padding: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }\n    .status-item { display: flex; align-items: center; gap: 0.5rem; }\n    .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #ef4444; }\n    .status-dot.active { background: #10b981; animation: pulse-dot 2s infinite; }\n    @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }\n    button { background: #a855f7; color: #0f0f1a; border: none; padding: 0.75rem 1.5rem; font-size: 1rem; font-weight: bold; cursor: pointer; border-radius: 6px; font-family: monospace; }\n    button:disabled { opacity: 0.3; cursor: not-allowed; }\n    button.recording { background: #ef4444; animation: pulse-btn 1s infinite; }\n    @keyframes pulse-btn { 0%, 100% { opacity: 1; } 50% { opacity: 0.8; } }\n    .chat-container { flex: 1; padding: 2rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; }\n    .message { padding: 1rem; border-radius: 8px; max-width: 80%; word-wrap: break-word; }\n    .message.user { background: rgba(168,85,247,0.2); border: 1px solid #a855f7; align-self: flex-end; }\n    .message.voice { background: rgba(16,185,129,0.2); border: 1px solid #10b981; align-self: flex-end; }\n    .message.assistant { background: rgba(245,158,11,0.1); border: 1px solid #f59e0b; align-self: flex-start; }\n    .message .meta { font-size: 0.8rem; opacity: 0.7; margin-bottom: 0.5rem; }\n    .message .content { line-height: 1.5; }\n    .input-area { padding: 1.5rem; border-top: 2px solid #a855f7; display: flex; gap: 1rem; }\n    input { flex: 1; background: rgba(168,85,247,0.1); border: 1px solid #a855f7; color: #a855f7; padding: 1rem; font-family: monospace; font-size: 1rem; border-radius: 6px; }\n    input:focus { outline: none; border-color: #f59e0b; }\n    .error { background: rgba(239,68,68,0.1); border: 1px solid #ef4444; color: #ef4444; padding: 1rem; border-radius: 8px; margin: 1rem; }\n    .hidden { display: none; }\n  </style>\n</head>\n<body>\n  <div class="header">\n    <h1>PHOENIX VOICE CHAT</h1>\n    <p class="subtitle">B0 + B1 INTEGRATED: Speak → Obi Responds</p>\n  </div>\n  <div class="status-bar">\n    <div class="status-item">\n      <span class="status-dot" id="voice-status"></span>\n      <span id="voice-text">Voice: Disconnected</span>\n    </div>\n    <div class="status-item">\n      <span class="status-dot" id="chat-status"></span>\n      <span id="chat-text">Chat: Ready</span>\n    </div>\n    <div class="status-item">\n      <button id="voice-btn" disabled>🎤 Start Voice</button>\n    </div>\n  </div>\n  <div id="error" class="error hidden"></div>\n  <div class="chat-container" id="chat"></div>\n  <div class="input-area">\n    <input type="text" id="text-input" placeholder="Type a message or use voice..." />\n    <button id="send-btn">Send</button>\n  </div>\n  <script>\n    let ws = null, mediaRec = null, stream = null;\n    const chat = document.getElementById(\'chat\');\n    const errorBox = document.getElementById(\'error\');\n    const voiceBtn = document.getElementById(\'voice-btn\');\n    const sendBtn = document.getElementById(\'send-btn\');\n    const textInput = document.getElementById(\'text-input\');\n    const voiceStatus = document.getElementById(\'voice-status\');\n    const voiceText = document.getElementById(\'voice-text\');\n    const chatStatus = document.getElementById(\'chat-status\');\n    const chatText = document.getElementById(\'chat-text\');\n    const sessionId = \'voice-session-\' + Date.now();\n    let isRecording = false;\n    \n    function showError(msg) {\n      errorBox.textContent = msg;\n      errorBox.classList.remove(\'hidden\');\n    }\n    \n    function addMessage(role, content, meta) {\n      const msg = document.createElement(\'div\');\n      msg.className = \'message \' + role;\n      if (meta) {\n        const metaDiv = document.createElement(\'div\');\n        metaDiv.className = \'meta\';\n        metaDiv.textContent = meta;\n        msg.appendChild(metaDiv);\n      }\n      const contentDiv = document.createElement(\'div\');\n      contentDiv.className = \'content\';\n      contentDiv.textContent = content;\n      msg.appendChild(contentDiv);\n      chat.appendChild(msg);\n      chat.scrollTop = chat.scrollHeight;\n    }\n    \n    async function sendToObi(message, source) {\n      chatStatus.classList.add(\'active\');\n      chatText.textContent = \'Chat: Processing...\';\n      \n      try {\n        const resp = await fetch(\'/chat\', {\n          method: \'POST\',\n          headers: { \n            \'Content-Type\': \'application/json\'\n          },\n          body: JSON.stringify({ message: message, sessionId: sessionId })\n        });\n        \n        if (!resp.ok) {\n          throw new Error(\'Chat error: \' + resp.status);\n        }\n        \n        const data = await resp.json();\n        addMessage(\'assistant\', data.reply, \'Obi (\' + data.aiUsed + \')\');\n        chatStatus.classList.add(\'active\');\n        chatText.textContent = \'Chat: Ready\';\n      } catch (err) {\n        showError(err.message);\n        chatStatus.classList.remove(\'active\');\n        chatText.textContent = \'Chat: Error\';\n      }\n    }\n    \n    async function startVoice() {\n      errorBox.classList.add(\'hidden\');\n      \n      try {\n        voiceText.textContent = \'Voice: Connecting...\';\n        const wsUrl = location.protocol.replace(\'http\', \'ws\') + \'//\' + location.host + \'/deepgram-ws\';\n        ws = new WebSocket(wsUrl);\n        \n        ws.onopen = async () => {\n          voiceStatus.classList.add(\'active\');\n          voiceText.textContent = \'Voice: Getting mic...\';\n          \n          stream = await navigator.mediaDevices.getUserMedia({ audio: true });\n          const mimeType = MediaRecorder.isTypeSupported(\'audio/webm;codecs=opus\')\n            ? \'audio/webm;codecs=opus\'\n            : \'audio/webm\';\n          \n          mediaRec = new MediaRecorder(stream, { mimeType: mimeType });\n          mediaRec.ondataavailable = async (e) => {\n            if (!e.data || e.data.size === 0 || !ws || ws.readyState !== 1) return;\n            const ab = await e.data.arrayBuffer();\n            ws.send(ab);\n          };\n          \n          mediaRec.start(250);\n          isRecording = true;\n          voiceBtn.textContent = \'🛑 Stop Voice\';\n          voiceBtn.classList.add(\'recording\');\n          voiceText.textContent = \'Voice: Recording (speak now)\';\n        };\n        \n        ws.onmessage = async (e) => {\n          try {\n            const data = JSON.parse(e.data);\n            if (data.__debug) return;\n            \n            const transcript = data.channel && data.channel.alternatives && data.channel.alternatives[0] && data.channel.alternatives[0].transcript;\n            const isFinal = data.is_final || false;\n            \n            if (transcript && isFinal) {\n              addMessage(\'voice\', transcript, \'You (voice)\');\n              await sendToObi(transcript, \'voice\');\n            }\n          } catch (err) {}\n        };\n        \n        ws.onerror = () => {\n          showError(\'Voice connection failed\');\n          stopVoice();\n        };\n        \n        ws.onclose = (e) => {\n          if (e.code !== 1000) {\n            showError(\'Voice disconnected: \' + e.code);\n          }\n          stopVoice();\n        };\n      } catch (err) {\n        showError(\'Voice error: \' + err.message);\n        stopVoice();\n      }\n    }\n    \n    function stopVoice() {\n      if (ws && ws.readyState === 1) {\n        ws.send(JSON.stringify({ type: \'CloseStream\' }));\n      }\n      if (mediaRec && mediaRec.state !== \'inactive\') mediaRec.stop();\n      if (stream) stream.getTracks().forEach(function(t) { t.stop(); });\n      if (ws && ws.readyState < 2) ws.close();\n      \n      isRecording = false;\n      voiceBtn.textContent = \'🎤 Start Voice\';\n      voiceBtn.classList.remove(\'recording\');\n      voiceStatus.classList.remove(\'active\');\n      voiceText.textContent = \'Voice: Stopped\';\n    }\n    \n    voiceBtn.onclick = function() {\n      if (isRecording) stopVoice();\n      else startVoice();\n    };\n    \n    sendBtn.onclick = async function() {\n      const msg = textInput.value.trim();\n      if (!msg) return;\n      \n      addMessage(\'user\', msg, \'You (text)\');\n      textInput.value = \'\';\n      await sendToObi(msg, \'text\');\n    };\n    \n    textInput.addEventListener(\'keypress\', function(e) {\n      if (e.key === \'Enter\') sendBtn.click();\n    });\n    \n    chatStatus.classList.add(\'active\');\n    voiceBtn.disabled = false;\n    addMessage(\'assistant\', \'Voice + text chat ready. Speak or type to begin.\', \'Obi\');\n  </script>\n</body>\n</html>';
+const VOICE_CHAT_HTML = '<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>Phoenix Voice Chat - B0+B1+B2 INTEGRATED</title>\n  <style>\n    * { margin: 0; padding: 0; box-sizing: border-box; }\n    body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; display: flex; flex-direction: column; }\n    .header { text-align: center; padding: 2rem; border-bottom: 2px solid #a855f7; }\n    h1 { color: #f59e0b; margin-bottom: 0.5rem; }\n    .subtitle { color: #10b981; font-size: 0.9rem; }\n    .status-bar { background: rgba(168,85,247,0.1); border-bottom: 1px solid #a855f7; padding: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }\n    .status-item { display: flex; align-items: center; gap: 0.5rem; }\n    .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #ef4444; }\n    .status-dot.active { background: #10b981; animation: pulse-dot 2s infinite; }\n    @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }\n    button { background: #a855f7; color: #0f0f1a; border: none; padding: 0.75rem 1.5rem; font-size: 1rem; font-weight: bold; cursor: pointer; border-radius: 6px; font-family: monospace; }\n    button:disabled { opacity: 0.3; cursor: not-allowed; }\n    button.recording { background: #ef4444; animation: pulse-btn 1s infinite; }\n    @keyframes pulse-btn { 0%, 100% { opacity: 1; } 50% { opacity: 0.8; } }\n    .chat-container { flex: 1; padding: 2rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; }\n    .message { padding: 1rem; border-radius: 8px; max-width: 80%; word-wrap: break-word; }\n    .message.user { background: rgba(168,85,247,0.2); border: 1px solid #a855f7; align-self: flex-end; }\n    .message.voice { background: rgba(16,185,129,0.2); border: 1px solid #10b981; align-self: flex-end; }\n    .message.assistant { background: rgba(245,158,11,0.1); border: 1px solid #f59e0b; align-self: flex-start; }\n    .message .meta { font-size: 0.8rem; opacity: 0.7; margin-bottom: 0.5rem; }\n    .message .content { line-height: 1.5; }\n    .input-area { padding: 1.5rem; border-top: 2px solid #a855f7; display: flex; gap: 1rem; }\n    input { flex: 1; background: rgba(168,85,247,0.1); border: 1px solid #a855f7; color: #a855f7; padding: 1rem; font-family: monospace; font-size: 1rem; border-radius: 6px; }\n    input:focus { outline: none; border-color: #f59e0b; }\n    .error { background: rgba(239,68,68,0.1); border: 1px solid #ef4444; color: #ef4444; padding: 1rem; border-radius: 8px; margin: 1rem; }\n    .hidden { display: none; }\n  </style>\n</head>\n<body>\n  <div class="header">\n    <h1>PHOENIX VOICE CHAT</h1>\n    <p class="subtitle">B0+B1+B2: Speak → Obi Responds + STONESKY Verified</p>\n  </div>\n  <div class="status-bar">\n    <div class="status-item">\n      <span class="status-dot" id="voice-status"></span>\n      <span id="voice-text">Voice: Disconnected</span>\n    </div>\n    <div class="status-item">\n      <span class="status-dot" id="chat-status"></span>\n      <span id="chat-text">Chat: Ready</span>\n    </div>\n    <div class="status-item">\n      <span class="status-dot" id="ledger-status"></span>\n      <span id="ledger-text">Ledger: Checking...</span>\n    </div>\n    <div class="status-item">\n      <button id="voice-btn" disabled>🎤 Start Voice</button>\n    </div>\n  </div>\n  <div id="error" class="error hidden"></div>\n  <div class="chat-container" id="chat"></div>\n  <div class="input-area">\n    <input type="text" id="text-input" placeholder="Type a message or use voice..." />\n    <button id="send-btn">Send</button>\n  </div>\n  <script>\n    let ws = null, mediaRec = null, stream = null;\n    const chat = document.getElementById(\'chat\');\n    const errorBox = document.getElementById(\'error\');\n    const voiceBtn = document.getElementById(\'voice-btn\');\n    const sendBtn = document.getElementById(\'send-btn\');\n    const textInput = document.getElementById(\'text-input\');\n    const voiceStatus = document.getElementById(\'voice-status\');\n    const voiceText = document.getElementById(\'voice-text\');\n    const chatStatus = document.getElementById(\'chat-status\');\n    const chatText = document.getElementById(\'chat-text\');\n    const ledgerStatus = document.getElementById(\'ledger-status\');\n    const ledgerText = document.getElementById(\'ledger-text\');\n    const sessionId = \'voice-session-\' + Date.now();\n    let isRecording = false;\n    \n    function showError(msg) {\n      errorBox.textContent = msg;\n      errorBox.classList.remove(\'hidden\');\n    }\n    \n    function addMessage(role, content, meta) {\n      const msg = document.createElement(\'div\');\n      msg.className = \'message \' + role;\n      if (meta) {\n        const metaDiv = document.createElement(\'div\');\n        metaDiv.className = \'meta\';\n        metaDiv.textContent = meta;\n        msg.appendChild(metaDiv);\n      }\n      const contentDiv = document.createElement(\'div\');\n      contentDiv.className = \'content\';\n      contentDiv.textContent = content;\n      msg.appendChild(contentDiv);\n      chat.appendChild(msg);\n      chat.scrollTop = chat.scrollHeight;\n    }\n    \n    async function verifyLedger() {\n      try {\n        const resp = await fetch(\'/verify?sessionId=\' + sessionId);\n        const data = await resp.json();\n        \n        if (data.valid) {\n          ledgerStatus.classList.add(\'active\');\n          ledgerText.textContent = \'Ledger: 🔒 VERIFIED (\' + data.ledgerLength + \')\';\n        } else {\n          ledgerStatus.classList.remove(\'active\');\n          ledgerText.textContent = \'Ledger: ⚠️ TAMPERED\';\n        }\n      } catch (err) {\n        ledgerText.textContent = \'Ledger: Error\';\n      }\n    }\n    \n    async function sendToObi(message, source) {\n      chatStatus.classList.add(\'active\');\n      chatText.textContent = \'Chat: Processing...\';\n      \n      try {\n        const resp = await fetch(\'/chat\', {\n          method: \'POST\',\n          headers: { \n            \'Content-Type\': \'application/json\'\n          },\n          body: JSON.stringify({ message: message, sessionId: sessionId })\n        });\n        \n        if (!resp.ok) {\n          throw new Error(\'Chat error: \' + resp.status);\n        }\n        \n        const data = await resp.json();\n        addMessage(\'assistant\', data.reply, \'Obi (\' + data.aiUsed + \')\');\n        chatStatus.classList.add(\'active\');\n        chatText.textContent = \'Chat: Ready\';\n        await verifyLedger();\n      } catch (err) {\n        showError(err.message);\n        chatStatus.classList.remove(\'active\');\n        chatText.textContent = \'Chat: Error\';\n      }\n    }\n    \n    async function startVoice() {\n      errorBox.classList.add(\'hidden\');\n      \n      try {\n        voiceText.textContent = \'Voice: Connecting...\';\n        const wsUrl = location.protocol.replace(\'http\', \'ws\') + \'//\' + location.host + \'/deepgram-ws\';\n        ws = new WebSocket(wsUrl);\n        \n        ws.onopen = async () => {\n          voiceStatus.classList.add(\'active\');\n          voiceText.textContent = \'Voice: Getting mic...\';\n          \n          stream = await navigator.mediaDevices.getUserMedia({ audio: true });\n          const mimeType = MediaRecorder.isTypeSupported(\'audio/webm;codecs=opus\')\n            ? \'audio/webm;codecs=opus\'\n            : \'audio/webm\';\n          \n          mediaRec = new MediaRecorder(stream, { mimeType: mimeType });\n          mediaRec.ondataavailable = async (e) => {\n            if (!e.data || e.data.size === 0 || !ws || ws.readyState !== 1) return;\n            const ab = await e.data.arrayBuffer();\n            ws.send(ab);\n          };\n          \n          mediaRec.start(250);\n          isRecording = true;\n          voiceBtn.textContent = \'🛑 Stop Voice\';\n          voiceBtn.classList.add(\'recording\');\n          voiceText.textContent = \'Voice: Recording (speak now)\';\n        };\n        \n        ws.onmessage = async (e) => {\n          try {\n            const data = JSON.parse(e.data);\n            if (data.__debug) return;\n            \n            const transcript = data.channel && data.channel.alternatives && data.channel.alternatives[0] && data.channel.alternatives[0].transcript;\n            const isFinal = data.is_final || false;\n            \n            if (transcript && isFinal) {\n              addMessage(\'voice\', transcript, \'You (voice)\');\n              await sendToObi(transcript, \'voice\');\n            }\n          } catch (err) {}\n        };\n        \n        ws.onerror = () => {\n          showError(\'Voice connection failed\');\n          stopVoice();\n        };\n        \n        ws.onclose = (e) => {\n          if (e.code !== 1000) {\n            showError(\'Voice disconnected: \' + e.code);\n          }\n          stopVoice();\n        };\n      } catch (err) {\n        showError(\'Voice error: \' + err.message);\n        stopVoice();\n      }\n    }\n    \n    function stopVoice() {\n      if (ws && ws.readyState === 1) {\n        ws.send(JSON.stringify({ type: \'CloseStream\' }));\n      }\n      if (mediaRec && mediaRec.state !== \'inactive\') mediaRec.stop();\n      if (stream) stream.getTracks().forEach(function(t) { t.stop(); });\n      if (ws && ws.readyState < 2) ws.close();\n      \n      isRecording = false;\n      voiceBtn.textContent = \'🎤 Start Voice\';\n      voiceBtn.classList.remove(\'recording\');\n      voiceStatus.classList.remove(\'active\');\n      voiceText.textContent = \'Voice: Stopped\';\n    }\n    \n    voiceBtn.onclick = function() {\n      if (isRecording) stopVoice();\n      else startVoice();\n    };\n    \n    sendBtn.onclick = async function() {\n      const msg = textInput.value.trim();\n      if (!msg) return;\n      \n      addMessage(\'user\', msg, \'You (text)\');\n      textInput.value = \'\';\n      await sendToObi(msg, \'text\');\n    };\n    \n    textInput.addEventListener(\'keypress\', function(e) {\n      if (e.key === \'Enter\') sendBtn.click();\n    });\n    \n    chatStatus.classList.add(\'active\');\n    voiceBtn.disabled = false;\n    addMessage(\'assistant\', \'Voice + text chat ready. STONESKY ledger active.\', \'Obi\');\n    verifyLedger();\n  </script>\n</body>\n</html>';
 
 const VOICE_TEST_HTML = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Phoenix Voice Test</title></head><body><h1>Voice Test - B0 Only</h1><button id="start">Start</button><button id="stop" disabled>Stop</button><div id="transcript"></div><script>console.log("Voice test loaded");</script></body></html>';
 
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    
+    if (url.pathname === '/verify') {
+      const sessionId = url.searchParams.get('sessionId');
+      if (!sessionId) {
+        return new Response(JSON.stringify({ error: 'Missing sessionId' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+        });
+      }
+      
+      const doId = env.SESSIONS.idFromName(sessionId);
+      const doStub = env.SESSIONS.get(doId);
+      const verifyResp = await doStub.fetch('https://fake/verify');
+      const verifyData = await verifyResp.json();
+      
+      return new Response(JSON.stringify(verifyData), {
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
+      });
+    }
     
     if (url.pathname === '/deepgram-ws') {
       const upgradeHeader = request.headers.get('Upgrade');
@@ -330,10 +412,13 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v113-B0B1-INTEGRATED',
+        version: 'v114-B2-STONESKY',
         benchmarks: {
-          'b0+b1': 'INTEGRATED - Voice to Chat',
-          b2: 'pending', b3: 'pending', b4: 'pending', b5: 'pending'
+          'b0+b1': '✅ INTEGRATED - Voice to Chat',
+          b2: '✅ LIVE - STONESKY Merkle ledger',
+          b3: 'pending - Drone mining', 
+          b4: 'pending - Unplanned command',
+          b5: 'pending - Student login'
         }
       }), { 
         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
@@ -371,6 +456,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v113-B0B1-INTEGRATED', { status: 404 });
+    return new Response('Phoenix OB1 v114-B2-STONESKY', { status: 404 });
   }
 };
