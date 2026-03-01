@@ -1,4 +1,4 @@
-// reincarnate.js - Phoenix OB1 System v1.2
+// reincarnate.js - Phoenix OB1 System v1.2.1
 // B0: Deepgram voice transcription
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
@@ -128,12 +128,21 @@ export default {
       
       const [client, server] = Object.values(new WebSocketPair());
       
-      // Connect to Deepgram
+      // Connect to Deepgram with proper authentication
       const deepgramUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true`;
-      const deepgramWs = new WebSocket(deepgramUrl, [
-        'token',
-        env.DEEPGRAM_API_KEY
-      ]);
+      
+      // Create request with Authorization header
+      const deepgramRequest = new Request(deepgramUrl, {
+        headers: {
+          'Authorization': `Token ${env.DEEPGRAM_API_KEY}`
+        }
+      });
+      
+      const deepgramWs = new WebSocket(deepgramUrl, {
+        headers: {
+          'Authorization': `Token ${env.DEEPGRAM_API_KEY}`
+        }
+      });
       
       // Forward audio from client to Deepgram
       server.accept();
@@ -245,7 +254,7 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v1.2-b0-deepgram-live',
+        version: 'v1.2.1-b0-auth-fixed',
         gospel: '444',
         reality: 'C',
         benchmarks: {
