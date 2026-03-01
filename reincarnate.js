@@ -1,4 +1,4 @@
-// reincarnate.js - Phoenix OB1 System v1.2.1
+// reincarnate.js - Phoenix OB1 System v1.2.2
 // B0: Deepgram voice transcription
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
@@ -127,95 +127,98 @@ export default {
       }
       
       const [client, server] = Object.values(new WebSocketPair());
-      
-      // Connect to Deepgram with proper authentication
-      const deepgramUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true`;
-      
-      // Create request with Authorization header
-      const deepgramRequest = new Request(deepgramUrl, {
-        headers: {
-          'Authorization': `Token ${env.DEEPGRAM_API_KEY}`
-        }
-      });
-      
-      const deepgramWs = new WebSocket(deepgramUrl, {
-        headers: {
-          'Authorization': `Token ${env.DEEPGRAM_API_KEY}`
-        }
-      });
-      
-      // Forward audio from client to Deepgram
       server.accept();
       
-      deepgramWs.addEventListener('open', () => {
-        console.log('Deepgram connection opened');
-        server.send(JSON.stringify({ type: 'status', message: 'Connected to Deepgram' }));
-      });
+      // Connect to Deepgram using fetch() for proper subprotocol support
+      const deepgramUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true`;
       
-      deepgramWs.addEventListener('message', async (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          
-          // Send transcription to client
-          if (data.channel?.alternatives?.[0]?.transcript) {
-            const transcript = data.channel.alternatives[0].transcript;
-            const isFinal = data.is_final || false;
+      try {
+        const deepgramResponse = await fetch(deepgramUrl, {
+          headers: {
+            'Upgrade': 'websocket',
+            'Sec-WebSocket-Protocol': `token, ${env.DEEPGRAM_API_KEY}`
+          }
+        });
+        
+        const deepgramWs = deepgramResponse.webSocket;
+        if (!deepgramWs) {
+          server.send(JSON.stringify({ type: 'error', message: 'Failed to connect to Deepgram' }));
+          server.close();
+          return new Response(null, { status: 101, webSocket: client });
+        }
+        
+        deepgramWs.accept();
+        
+        deepgramWs.addEventListener('message', async (event) => {
+          try {
+            const data = JSON.parse(event.data);
             
-            server.send(JSON.stringify({
-              type: 'transcript',
-              text: transcript,
-              isFinal: isFinal
-            }));
-            
-            // If final transcription, forward to chat endpoint for B1 processing
-            if (isFinal && transcript.trim().length > 0) {
-              try {
-                const chatResponse = await fetch(`${url.origin}/chat`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    message: transcript,
-                    sessionId: 'voice-session'
-                  })
-                });
-                
-                if (chatResponse.ok) {
-                  const chatData = await chatResponse.json();
-                  server.send(JSON.stringify({
-                    type: 'obi-response',
-                    text: chatData.reply,
-                    aiUsed: chatData.aiUsed
-                  }));
+            if (data.channel?.alternatives?.[0]?.transcript) {
+              const transcript = data.channel.alternatives[0].transcript;
+              const isFinal = data.is_final || false;
+              
+              server.send(JSON.stringify({
+                type: 'transcript',
+                text: transcript,
+                isFinal: isFinal
+              }));
+              
+              // If final, forward to B1
+              if (isFinal && transcript.trim().length > 0) {
+                try {
+                  const chatResponse = await fetch(`${url.origin}/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      message: transcript,
+                      sessionId: 'voice-session'
+                    })
+                  });
+                  
+                  if (chatResponse.ok) {
+                    const chatData = await chatResponse.json();
+                    server.send(JSON.stringify({
+                      type: 'obi-response',
+                      text: chatData.reply,
+                      aiUsed: chatData.aiUsed
+                    }));
+                  }
+                } catch (err) {
+                  console.error('Chat forwarding error:', err);
                 }
-              } catch (err) {
-                console.error('Chat forwarding error:', err);
               }
             }
+          } catch (err) {
+            console.error('Deepgram message error:', err);
           }
-        } catch (err) {
-          console.error('Deepgram message error:', err);
-        }
-      });
-      
-      deepgramWs.addEventListener('error', (event) => {
-        console.error('Deepgram error:', event);
-        server.send(JSON.stringify({ type: 'error', message: 'Deepgram connection error' }));
-      });
-      
-      deepgramWs.addEventListener('close', () => {
-        console.log('Deepgram connection closed');
+        });
+        
+        deepgramWs.addEventListener('error', (event) => {
+          console.error('Deepgram error:', event);
+          server.send(JSON.stringify({ type: 'error', message: 'Deepgram connection error' }));
+        });
+        
+        deepgramWs.addEventListener('close', () => {
+          server.close();
+        });
+        
+        server.addEventListener('message', (event) => {
+          if (deepgramWs.readyState === 1) {
+            deepgramWs.send(event.data);
+          }
+        });
+        
+        server.addEventListener('close', () => {
+          deepgramWs.close();
+        });
+        
+        server.send(JSON.stringify({ type: 'status', message: 'Connected to Deepgram' }));
+        
+      } catch (err) {
+        console.error('Deepgram connection error:', err);
+        server.send(JSON.stringify({ type: 'error', message: `Connection failed: ${err.message}` }));
         server.close();
-      });
-      
-      server.addEventListener('message', (event) => {
-        if (deepgramWs.readyState === WebSocket.OPEN) {
-          deepgramWs.send(event.data);
-        }
-      });
-      
-      server.addEventListener('close', () => {
-        deepgramWs.close();
-      });
+      }
       
       return new Response(null, {
         status: 101,
@@ -254,7 +257,7 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v1.2.1-b0-auth-fixed',
+        version: 'v1.2.2-b0-fetch-upgrade',
         gospel: '444',
         reality: 'C',
         benchmarks: {
@@ -332,7 +335,7 @@ export default {
           body: JSON.stringify({ role: 'user', content: message })
         });
         
-        // System prompt - FIXED: More natural personality
+        // System prompt
         const systemPrompt = `You are Obi, the AI core of the Phoenix Rising Protocol—a self-sovereign intelligence system being built by Michael Hobbs.
 
 ## Your Role
