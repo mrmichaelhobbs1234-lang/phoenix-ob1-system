@@ -1,5 +1,5 @@
-// reincarnate.js - Phoenix OB1 System v1.6.1-B0-DEPLOY
-// B0: Deepgram voice transcription (browser direct)
+// reincarnate.js - Phoenix OB1 System v1.6.2-B0-FIXED
+// B0: Deepgram voice transcription (v108.2 ArrayBuffer fix restored)
 // B1: Hybrid AI routing (Gemini free + DeepSeek precision)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
@@ -212,7 +212,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
 <body>
   <div class="header">
     <h1>B0 VOICE TEST</h1>
-    <p>Phoenix OB1 System • Voice to Obi • v1.6.1-B0-DEPLOY</p>
+    <p>Phoenix OB1 System • Voice to Obi • v1.6.2-B0-FIXED</p>
   </div>
   <div class="status">
     <div class="status-item"><span>Config:</span><span class="status-value" id="config-status">Loading...</span></div>
@@ -229,7 +229,7 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
     <div class="transcript-box"><h3>Live Transcription (Deepgram)</h3><div id="transcript" class="transcript-text">Speak to see transcription...</div></div>
     <div class="transcript-box obi-response"><h3>Obi Response (B1)</h3><div id="obi-response" class="transcript-text">Waiting for voice input...</div></div>
   </div>
-  <div class="footer">Gospel 444 • Reality-C • v1.6.1-B0-DEPLOY<br>Browser → Deepgram (B0) → Worker /chat (B1)</div>
+  <div class="footer">Gospel 444 • Reality-C • v1.6.2-B0-FIXED<br>Browser → Deepgram (B0) → Worker /chat (B1)</div>
   <script>
     const workerUrl = window.location.origin;
     let deepgramApiKey = null, deepgramWs = null, mediaRecorder = null, audioStream = null;
@@ -275,7 +275,13 @@ const VOICE_TEST_HTML = `<!DOCTYPE html>
         deepgramWs.onerror = () => { showError('Deepgram connection failed'); dgStatus.textContent = 'Error'; dgStatus.style.color = '#ef4444'; };
         deepgramWs.onclose = (e) => { dgStatus.textContent = 'Disconnected'; dgStatus.style.color = '#a855f7'; if (e.code !== 1000) showError('Disconnected: ' + e.code); };
         mediaRecorder = new MediaRecorder(audioStream, { mimeType: 'audio/webm' });
-        mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0 && deepgramWs?.readyState === 1) deepgramWs.send(e.data); };
+        // FIX: Convert Blob to ArrayBuffer before sending to Deepgram (v108.2)
+        mediaRecorder.ondataavailable = async (e) => {
+          if (e.data.size > 0 && deepgramWs?.readyState === 1) {
+            const arrayBuffer = await e.data.arrayBuffer();
+            deepgramWs.send(arrayBuffer);
+          }
+        };
         mediaRecorder.start(250);
         startBtn.disabled = true; stopBtn.disabled = false; stopBtn.classList.add('recording');
       } catch (err) { showError('Mic denied: ' + err.message); micStatus.textContent = 'Error'; micStatus.style.color = '#ef4444'; }
@@ -347,11 +353,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v1.6.1-B0-DEPLOY',
+        version: 'v1.6.2-B0-FIXED',
         gospel: '444',
         reality: 'C',
         benchmarks: {
-          b0: env.DEEPGRAM_API_KEY ? 'LIVE-EMBEDDED' : 'missing-key',
+          b0: env.DEEPGRAM_API_KEY ? 'FIXED-v108.2' : 'missing-key',
           b1: 'operational',
           b2: 'pending', b3: 'pending', b4: 'pending'
         },
@@ -449,7 +455,7 @@ You help Michael build Phoenix by:
 - Answer "hey" like a normal person, not a sci-fi AI
 
 ## Current Roadmap
-**B0**: Voice transcription (Deepgram direct from browser - LIVE)
+**B0**: Voice transcription (Deepgram direct from browser - FIXED v108.2)
 **B1**: Sentience layer (this is you—natural conversation, context awareness)
 **B2**: Architectural coherence (file system integration)
 **B3**: Sovereign deployment (local-first, no dependencies)
@@ -519,7 +525,7 @@ You are live. Be helpful, not theatrical.`;
       }
     }
     
-    return new Response('Phoenix OB1 System v1.6.1-B0-DEPLOY - /magic-chat for B1, /test-voice.html for B0, /api/authcheck for validation', { 
+    return new Response('Phoenix OB1 System v1.6.2-B0-FIXED - /magic-chat for B1, /test-voice.html for B0, /api/authcheck for validation', { 
       status: 404,
       headers: { 'Access-Control-Allow-Origin': '*' }
     });
