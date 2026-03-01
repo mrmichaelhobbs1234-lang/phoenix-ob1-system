@@ -276,9 +276,9 @@
         micStatus.textContent = 'Active';
         micStatus.style.color = '#10b981';
 
-        // Connect directly to Deepgram
-        const deepgramUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true`;
-        deepgramWs = new WebSocket(deepgramUrl, ['token', deepgramApiKey]);
+        // Connect directly to Deepgram using query parameter authentication
+        const deepgramUrl = `wss://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true&token=${deepgramApiKey}`;
+        deepgramWs = new WebSocket(deepgramUrl);
 
         deepgramWs.onopen = () => {
           dgStatus.textContent = 'Connected';
@@ -335,15 +335,18 @@
 
         deepgramWs.onerror = (error) => {
           console.error('Deepgram error:', error);
-          showError('Deepgram connection failed');
+          showError('Deepgram connection failed - check console for details');
           dgStatus.textContent = 'Error';
           dgStatus.style.color = '#ef4444';
         };
 
-        deepgramWs.onclose = () => {
+        deepgramWs.onclose = (event) => {
           dgStatus.textContent = 'Disconnected';
           dgStatus.style.color = '#a855f7';
-          console.log('Deepgram closed');
+          console.log('Deepgram closed:', event.code, event.reason);
+          if (event.code !== 1000) {
+            showError(`Deepgram disconnected: ${event.code} - ${event.reason || 'Unknown error'}`);
+          }
         };
 
         // Setup MediaRecorder
