@@ -1,0 +1,47 @@
+name: Deploy B3 Knowledge Base
+
+on:
+  push:
+    branches:
+      - feature/b3-knowledge-base
+      - main
+    paths:
+      - 'benchmarks/b3-knowledge-base/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    name: Deploy B3 Indexer
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      
+      - name: Install Wrangler
+        run: npm install -g wrangler
+      
+      - name: Create Vectorize Index
+        run: |
+          wrangler vectorize create phoenix-knowledge-base \
+            --dimensions=768 \
+            --metric=cosine || echo "Index exists"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      
+      - name: Deploy Worker
+        run: |
+          cd benchmarks/b3-knowledge-base
+          wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      
+      - name: Set GitHub Token Secret
+        run: |
+          echo "${{ secrets.GH_INDEXER_TOKEN }}" | wrangler secret put GITHUB_TOKEN
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        working-directory: benchmarks/b3-knowledge-base
