@@ -1,10 +1,11 @@
-// reincarnate.js - Phoenix OB1 System v122-NO-GREETING
+// reincarnate.js - Phoenix OB1 System v123-MAGIC-CHAT-SEALED
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification (LIVE)
 // B3: Knowledge base mining - dynamic status
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
-// DEPLOY: 2026-03-02T08:31:00Z
+// DEPLOY: 2026-03-02T12:54:00Z
+// SEALED: Magic Chat greeting/mining/KB hygiene spec locked
 
 const rateLimits = new Map();
 
@@ -66,6 +67,102 @@ async function sha256(data) {
   const hashArray = Array.from(new Uint8Array(hashBuffer));
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
+
+// ===== MAGIC CHAT HELPERS - SEALED SPEC =====
+
+function norm(s) {
+  return (s || '').trim().toLowerCase();
+}
+
+function isGreeting(msg) {
+  const m = norm(msg);
+  if (!m) return false;
+  const exact = new Set(['hi', 'hey', 'hello', 'yo', 'sup', 'hiya']);
+  if (exact.has(m)) return true;
+  if (m.length <= 12 && (m === 'hi obi' || m === 'hey obi' || m === 'hello obi')) return true;
+  return false;
+}
+
+function isExplicitMineCommand(msg) {
+  const m = norm(msg);
+  if (!m.includes('mine')) return false;
+  // Ignore "mine is..." or "that's mine"
+  if (/\bmine\s+(is|was|has|been)\b/.test(m) || /that['’]?s\s+mine/.test(m)) return false;
+  return /(logs?|chat|knowledge|kb|history|files?)/.test(m) ||
+         /(refresh|reload)\s+(knowledge|kb|knowledge base)/.test(m);
+}
+
+function isMiningMetaSummaryRequest(msg) {
+  const m = norm(msg);
+  return (
+    m.includes('what did you learn') ||
+    m.includes('what did you find') ||
+    m.includes('what did you see') ||
+    m.includes('summary of mining') ||
+    m.includes('summary of the files') ||
+    /from the \d+\s*(files?|logs?)/.test(m)
+  );
+}
+
+function isQuestionLike(msg) {
+  const m = (msg || '').trim();
+  if (!m) return false;
+  if (m.endsWith('?')) return true;
+  return /\b(what|why|how|when|where|who|which)\b/i.test(m);
+}
+
+function isLogRecallRequest(msg) {
+  const m = norm(msg);
+  return /(last time|yesterday|previous|earlier|in our past|search the logs|check the logs|look up in the logs|in our chat history|from our chats)/.test(m);
+}
+
+function stringSimilarity(a, b) {
+  if (!a || !b) return 0;
+  const aLower = a.toLowerCase().trim();
+  const bLower = b.toLowerCase().trim();
+  if (aLower === bLower) return 1;
+  
+  const aWords = new Set(aLower.split(/\s+/));
+  const bWords = new Set(bLower.split(/\s+/));
+  const intersection = new Set([...aWords].filter(w => bWords.has(w)));
+  const union = new Set([...aWords, ...bWords]);
+  
+  return union.size === 0 ? 0 : intersection.size / union.size;
+}
+
+async function kbGetMeta(sessionId, env) {
+  try {
+    const doId = env.SESSIONS.idFromName(sessionId);
+    const doStub = env.SESSIONS.get(doId);
+    const resp = await doStub.fetch('https://fake/knowledge/get');
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+async function kbGetExamples(sessionId, env) {
+  try {
+    const doId = env.SESSIONS.idFromName(sessionId);
+    const doStub = env.SESSIONS.get(doId);
+    const resp = await doStub.fetch('https://fake/knowledge/search?q=summary');
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    
+    const results = data?.results || data?.matches || [];
+    const ex = results.slice(0, 3).map(r =>
+      r.snippet || r.preview || r.title || (typeof r === 'string' ? r : '')
+    ).filter(Boolean);
+    
+    while (ex.length < 3) ex.push('(none)');
+    return ex.slice(0, 3);
+  } catch {
+    return ['(none)', '(none)', '(none)'];
+  }
+}
+
+// ===== END MAGIC CHAT HELPERS =====
 
 function extractActionableEvents(filename, content) {
   const events = {
@@ -527,6 +624,11 @@ async function processChatMessage(message, sessionId, env) {
     throw new Error('Missing message or sessionId');
   }
   
+  // GREETING FAST-PATH: no mining, no KB, no history fetch
+  if (isGreeting(message)) {
+    return { reply: "Hi. I'm here. What do you need?", aiUsed: 'system' };
+  }
+  
   if (!checkRateLimit(sessionId)) {
     throw new Error('Rate limit exceeded');
   }
@@ -546,23 +648,23 @@ async function processChatMessage(message, sessionId, env) {
     body: JSON.stringify({ role: 'user', content: message, userId }) 
   });
   
-  const messageLower = message.toLowerCase();
   let specialAction = null;
   
-  if (messageLower.includes('mine') && (messageLower.includes('log') || messageLower.includes('chat') || messageLower.includes('knowledge'))) {
+  // EXPLICIT MINING GATE
+  if (isExplicitMineCommand(message)) {
     try {
       const mineResult = await mineKnowledgeBase(sessionId, env);
       if (mineResult.cached) {
         specialAction = `Already mined. ${mineResult.count} files and ${mineResult.layers} layers loaded.`;
       } else {
-        specialAction = `Mining complete! Loaded ${mineResult.count} files (out of ${mineResult.total} total) and extracted ${mineResult.layers} structured layers. You can now ask me anything about past conversations.`;
+        specialAction = `Mining complete! Loaded ${mineResult.count} files (out of ${mineResult.total} total) and extracted ${mineResult.layers} structured layers.`;
       }
     } catch (err) {
       specialAction = `Mining failed: ${err.message}`;
     }
   }
   
-  if (messageLower.includes('verify') && (messageLower.includes('ledger') || messageLower.includes('integrity'))) {
+  if (message.toLowerCase().includes('verify') && (message.toLowerCase().includes('ledger') || message.toLowerCase().includes('integrity'))) {
     const verifyResp = await doStub.fetch('https://fake/verify');
     const verifyData = await verifyResp.json();
     if (verifyData.valid) {
@@ -572,13 +674,33 @@ async function processChatMessage(message, sessionId, env) {
     }
   }
   
-  const metaResp = await doStub.fetch('https://fake/knowledge/get');
-  const meta = await metaResp.json();
+  // PULL KB META ONCE
+  const meta = await kbGetMeta(sessionId, env);
+  
+  // MINING META-SUMMARY BRANCH
+  if (isMiningMetaSummaryRequest(message)) {
+    if (!meta || !meta.fileCount) {
+      return { reply: 'No knowledge base loaded. Ask me to mine the logs first.', aiUsed: 'system' };
+    }
+    const ex = await kbGetExamples(sessionId, env);
+    return {
+      reply:
+        `From the mined logs: ${meta.fileCount} files loaded, ${meta.layerCount || 0} structured layers extracted.\n` +
+        `Examples:\n- ${ex[0]}\n- ${ex[1]}\n- ${ex[2]}`,
+      aiUsed: 'system'
+    };
+  }
+  
+  // KB-MISSING GUARD ONLY FOR EXPLICIT RECALL
+  if ((!meta || !meta.fileCount) && isLogRecallRequest(message)) {
+    return { reply: 'No knowledge base loaded. Ask me to mine the logs first.', aiUsed: 'system' };
+  }
   
   let contextAddition = '';
   let knowledgeStatus = '';
   
-  if (meta.fileCount && meta.fileCount > 0) {
+  // QUESTION-GATED KB SEARCH
+  if (meta && meta.fileCount && isQuestionLike(message)) {
     knowledgeStatus = `Knowledge base loaded: ${meta.fileCount} files, ${meta.layerCount} layers.`;
     
     const queryResult = await queryKnowledgeBase(message, sessionId, env);
@@ -601,11 +723,16 @@ async function processChatMessage(message, sessionId, env) {
         }
       }
     } else {
-      contextAddition = `\n\n[KNOWLEDGE BASE STATUS: No matches found for "${message}" in ${meta.fileCount} files and ${meta.layerCount} layers.]`;
+      // NO MENTION FOUND - only for questions with KB loaded
+      return {
+        reply: `I searched ${meta.fileCount} files and ${meta.layerCount || 0} layers but found no mention of that.`,
+        aiUsed: 'system'
+      };
     }
+  } else if (meta && meta.fileCount) {
+    knowledgeStatus = `Knowledge base loaded: ${meta.fileCount} files, ${meta.layerCount} layers.`;
   } else {
     knowledgeStatus = 'Knowledge base NOT mined yet.';
-    contextAddition = '\n\n[KNOWLEDGE BASE STATUS: NOT MINED. Cannot answer from past conversations.]';
   }
   
   const systemPrompt = `You are Obi, the AI core of the Phoenix Rising Protocol.
@@ -617,10 +744,10 @@ async function processChatMessage(message, sessionId, env) {
 4. NEVER cite a file unless it appears in [VERIFIED KNOWLEDGE BASE CONTEXT] or [FILES MATCHED]
 5. NEVER claim mining succeeded unless you see "Mining complete!" in your response
 6. NEVER invent layer numbers, file names, or content
-7. If [KNOWLEDGE BASE STATUS: NOT MINED], say "No knowledge base loaded. Ask me to mine the logs first."
-8. If [No matches found], say "I searched ${meta.fileCount || 0} files but found no mention of that."
-9. ONLY cite sources that appear in the context block above
-10. NO fabrication. NO guessing. FACT-CHECK EVERYTHING.
+7. If no knowledge context is provided, answer from general conversation context only
+8. ONLY cite sources that appear in the context block above
+9. NO fabrication. NO guessing. FACT-CHECK EVERYTHING.
+10. Be concise - no unnecessary explanation or meta-commentary
 
 ## Your Role
 You execute commands and answer questions for Michael Hobbs through conversational interface.
@@ -628,7 +755,7 @@ You execute commands and answer questions for Michael Hobbs through conversation
 ## Capabilities
 - **Mine knowledge**: When asked to "mine the logs", execute mining (already handled)
 - **Verify ledger**: When asked to "verify ledger", check STONESKY integrity (already handled)
-- **Answer from knowledge**: ONLY if knowledge base is loaded
+- **Answer from knowledge**: ONLY if knowledge base is loaded AND context is provided
 - **Voice + Text**: Respond naturally to both
 - **Cite sources**: ONLY mention files that exist in [FILES MATCHED] or [LAYERS FOUND]
 
@@ -638,6 +765,7 @@ You execute commands and answer questions for Michael Hobbs through conversation
 - Admit when you don't know
 - NO theatrical AI personality
 - NO greeting messages
+- NO echoing user input back
 
 ## Current Status
 ${knowledgeStatus}
@@ -645,14 +773,15 @@ ${knowledgeStatus}
 ## Important
 - Be concise
 - Cite sources: "From [exact filename], Layer [exact ID]: [exact quote]"
-- If no knowledge exists, say so
+- If no knowledge context exists, say so
 - Don't over-explain
 - NEVER make up citations
-- NEVER generate unsolicited greetings or instructions`;
+- NEVER generate unsolicited greetings or instructions
+- NEVER simply repeat what the user said`;
 
   const geminiMessages = [
     { role: 'user', parts: [{ text: systemPrompt }] },
-    { role: 'model', parts: [{ text: 'Understood. I will only respond to user messages and never generate greetings.' }] }
+    { role: 'model', parts: [{ text: 'Understood. I will only respond to user messages and never generate greetings or echo input.' }] }
   ];
   
   for (const msg of messages.slice(-10)) {
@@ -674,6 +803,20 @@ ${knowledgeStatus}
   } else {
     try {
       reply = await callGemini(geminiMessages, env);
+      
+      // ECHO/COPYCAT DETECTION
+      const similarity = stringSimilarity(message, reply);
+      if (similarity >= 0.85) {
+        // Retry once with anti-echo instruction
+        geminiMessages.push({ role: 'model', parts: [{ text: reply }] });
+        geminiMessages.push({ role: 'user', parts: [{ text: 'DO NOT REPEAT THE USER. Add new value or context.' }] });
+        reply = await callGemini(geminiMessages, env);
+        const retrySimilarity = stringSimilarity(message, reply);
+        if (retrySimilarity >= 0.85) {
+          reply = 'ECHOLOOP detected. Unable to generate non-repetitive response.';
+          aiUsed = 'error';
+        }
+      }
       
       if (env.DEEPSEEK_API_KEY && needsDeepSeek(message, reply)) {
         reply = await callDeepSeek(geminiMessages, env);
@@ -1093,11 +1236,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v122-NO-GREETING',
+        version: 'v123-MAGIC-CHAT-SEALED',
         benchmarks: {
           'b0+b1': '✅ Voice + text',
           b2: '✅ STONESKY ledger',
-          b3: '⚠️ Not configured', 
+          b3: '⚠️ Dynamic (mine to load)', 
           b4: '⏳ Pending',
           b5: '⏳ Pending'
         }
@@ -1137,6 +1280,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v122-NO-GREETING', { status: 404 });
+    return new Response('Phoenix OB1 v123-MAGIC-CHAT-SEALED', { status: 404 });
   }
 };
