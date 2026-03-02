@@ -1,4 +1,4 @@
-// reincarnate.js - Phoenix OB1 System v121-GREETING-FIXED
+// reincarnate.js - Phoenix OB1 System v122-NO-GREETING
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification (LIVE)
 // B3: Knowledge base mining - dynamic status
@@ -610,13 +610,16 @@ async function processChatMessage(message, sessionId, env) {
   const systemPrompt = `You are Obi, the AI core of the Phoenix Rising Protocol.
 
 ## CRITICAL RULES - NO EXCEPTIONS
-1. NEVER cite a file unless it appears in [VERIFIED KNOWLEDGE BASE CONTEXT] or [FILES MATCHED]
-2. NEVER claim mining succeeded unless you see "Mining complete!" in your response
-3. NEVER invent layer numbers, file names, or content
-4. If [KNOWLEDGE BASE STATUS: NOT MINED], say "No knowledge base loaded. Ask me to mine the logs first."
-5. If [No matches found], say "I searched ${meta.fileCount || 0} files but found no mention of that."
-6. ONLY cite sources that appear in the context block above
-7. NO fabrication. NO guessing. FACT-CHECK EVERYTHING.
+1. NEVER generate greeting messages when session starts or knowledge base is empty
+2. NEVER say "Ready" or "Say 'mine the logs'" or similar instructions unprompted
+3. ONLY respond when user sends a message - NEVER initiate conversation
+4. NEVER cite a file unless it appears in [VERIFIED KNOWLEDGE BASE CONTEXT] or [FILES MATCHED]
+5. NEVER claim mining succeeded unless you see "Mining complete!" in your response
+6. NEVER invent layer numbers, file names, or content
+7. If [KNOWLEDGE BASE STATUS: NOT MINED], say "No knowledge base loaded. Ask me to mine the logs first."
+8. If [No matches found], say "I searched ${meta.fileCount || 0} files but found no mention of that."
+9. ONLY cite sources that appear in the context block above
+10. NO fabrication. NO guessing. FACT-CHECK EVERYTHING.
 
 ## Your Role
 You execute commands and answer questions for Michael Hobbs through conversational interface.
@@ -633,6 +636,7 @@ You execute commands and answer questions for Michael Hobbs through conversation
 - Technical when needed
 - Admit when you don't know
 - NO theatrical AI personality
+- NO greeting messages
 
 ## Current Status
 ${knowledgeStatus}
@@ -642,11 +646,12 @@ ${knowledgeStatus}
 - Cite sources: "From [exact filename], Layer [exact ID]: [exact quote]"
 - If no knowledge exists, say so
 - Don't over-explain
-- NEVER make up citations`;
+- NEVER make up citations
+- NEVER generate unsolicited greetings or instructions`;
 
   const geminiMessages = [
     { role: 'user', parts: [{ text: systemPrompt }] },
-    { role: 'model', parts: [{ text: 'Understood. I will only cite verified sources from the knowledge base.' }] }
+    { role: 'model', parts: [{ text: 'Understood. I will only respond to user messages and never generate greetings.' }] }
   ];
   
   for (const msg of messages.slice(-10)) {
@@ -855,7 +860,7 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v121-GREETING-FIXED',
+        version: 'v122-NO-GREETING',
         benchmarks: {
           'b0+b1': '✅ Voice + text',
           b2: '✅ STONESKY ledger',
@@ -899,6 +904,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v121-GREETING-FIXED', { status: 404 });
+    return new Response('Phoenix OB1 v122-NO-GREETING', { status: 404 });
   }
 };
