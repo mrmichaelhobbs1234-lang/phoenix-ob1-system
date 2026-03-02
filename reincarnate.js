@@ -1,7 +1,7 @@
-// reincarnate.js - Phoenix OB1 System v115-B3-MINING
+// reincarnate.js - Phoenix OB1 System v115-B3-READY
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification (LIVE)
-// B3: Knowledge base mining from phoenix-chat-logs (OPERATIONAL)
+// B3: Knowledge base mining - READY FOR EXECUTION (needs GITHUB_TOKEN + deploy)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
 
@@ -66,6 +66,59 @@ async function sha256(data) {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+function extractActionableEvents(filename, content) {
+  const events = {
+    decisions: [],
+    benchmarks: [],
+    code: [],
+    architecture: [],
+    pedagogy: { vocab: [], idioms: [], slang: [], games: [] }
+  };
+  
+  const lines = content.split('\n');
+  
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].toLowerCase();
+    const original = lines[i];
+    
+    if (line.includes('decided') || line.includes('decision') || line.includes('we should')) {
+      events.decisions.push({ line: i, text: original.slice(0, 200) });
+    }
+    
+    if (line.match(/b[0-5]|benchmark/i)) {
+      events.benchmarks.push({ line: i, text: original.slice(0, 200) });
+    }
+    
+    if (line.includes('function') || line.includes('class') || line.includes('const ') || line.includes('async')) {
+      events.code.push({ line: i, text: original.slice(0, 200) });
+    }
+    
+    if (line.includes('architecture') || line.includes('system') || line.includes('protocol')) {
+      events.architecture.push({ line: i, text: original.slice(0, 200) });
+    }
+    
+    if (line.includes('vocab') || line.includes('idiom') || line.includes('slang') || line.includes('game')) {
+      if (line.includes('vocab')) events.pedagogy.vocab.push({ line: i, text: original.slice(0, 200) });
+      if (line.includes('idiom')) events.pedagogy.idioms.push({ line: i, text: original.slice(0, 200) });
+      if (line.includes('slang')) events.pedagogy.slang.push({ line: i, text: original.slice(0, 200) });
+      if (line.includes('game')) events.pedagogy.games.push({ line: i, text: original.slice(0, 200) });
+    }
+  }
+  
+  return events;
+}
+
+function buildLayer(index, type, content, source) {
+  return {
+    id: `L${String(index).padStart(4, '0')}`,
+    type: type,
+    content: content,
+    source: source,
+    timestamp: new Date().toISOString(),
+    hash: null
+  };
+}
+
 export class SessionDO {
   constructor(state, env) {
     this.state = state;
@@ -83,7 +136,7 @@ export class SessionDO {
     }
     
     if (url.pathname === '/knowledge/get') {
-      const knowledge = await this.state.storage.get('knowledge') || { files: [], lastMined: null };
+      const knowledge = await this.state.storage.get('knowledge') || { files: [], layers: [], lastMined: null };
       return new Response(JSON.stringify(knowledge), {
         headers: { 'Content-Type': 'application/json' }
       });
@@ -92,7 +145,7 @@ export class SessionDO {
     if (url.pathname === '/knowledge/set' && request.method === 'POST') {
       const knowledge = await request.json();
       await this.state.storage.put('knowledge', knowledge);
-      return new Response(JSON.stringify({ ok: true, count: knowledge.files?.length || 0 }), {
+      return new Response(JSON.stringify({ ok: true, count: knowledge.files?.length || 0, layers: knowledge.layers?.length || 0 }), {
         headers: { 'Content-Type': 'application/json' }
       });
     }
@@ -254,11 +307,11 @@ async function mineKnowledgeBase(sessionId, env) {
   const existing = await knowledgeResp.json();
   
   if (existing.files && existing.files.length > 0) {
-    return { cached: true, count: existing.files.length };
+    return { cached: true, count: existing.files.length, layers: existing.layers?.length || 0 };
   }
   
   if (!env.GITHUB_TOKEN) {
-    throw new Error('GITHUB_TOKEN not configured for mining');
+    throw new Error('GITHUB_TOKEN not configured. Set with: wrangler secret put GITHUB_TOKEN');
   }
   
   const repoUrl = 'https://api.github.com/repos/mrmichaelhobbs1234-lang/phoenix-chat-logs/contents/CHAT-LOGS-ONLY';
@@ -271,14 +324,16 @@ async function mineKnowledgeBase(sessionId, env) {
   });
   
   if (!listResp.ok) {
-    throw new Error('GitHub API error: ' + listResp.status);
+    throw new Error('GitHub API error: ' + listResp.status + '. Check GITHUB_TOKEN.');
   }
   
   const files = await listResp.json();
   const txtFiles = files.filter(f => f.name.endsWith('.txt') && f.type === 'file');
   
-  const maxFiles = Math.min(50, txtFiles.length);
+  const maxFiles = Math.min(500, txtFiles.length);
   const mined = [];
+  const layers = [];
+  let layerIndex = 0;
   
   for (let i = 0; i < maxFiles; i++) {
     const file = txtFiles[i];
@@ -292,18 +347,47 @@ async function mineKnowledgeBase(sessionId, env) {
       
       if (contentResp.ok) {
         const text = await contentResp.text();
-        mined.push({ name: file.name, content: text.slice(0, 50000) });
+        const truncated = text.slice(0, 50000);
+        mined.push({ name: file.name, content: truncated });
+        
+        const events = extractActionableEvents(file.name, truncated);
+        
+        if (events.decisions.length > 0) {
+          for (const dec of events.decisions.slice(0, 3)) {
+            layers.push(buildLayer(layerIndex++, 'decision', dec.text, file.name));
+          }
+        }
+        
+        if (events.benchmarks.length > 0) {
+          for (const bm of events.benchmarks.slice(0, 3)) {
+            layers.push(buildLayer(layerIndex++, 'benchmark', bm.text, file.name));
+          }
+        }
+        
+        if (events.architecture.length > 0) {
+          for (const arch of events.architecture.slice(0, 2)) {
+            layers.push(buildLayer(layerIndex++, 'architecture', arch.text, file.name));
+          }
+        }
       }
     } catch (err) {
       console.error('Failed to fetch', file.name);
     }
+    
+    if (layers.length >= 200) break;
+  }
+  
+  for (let i = 0; i < layers.length; i++) {
+    layers[i].hash = await sha256(layers[i].id + layers[i].type + layers[i].content);
   }
   
   const knowledge = {
     files: mined,
+    layers: layers,
     lastMined: new Date().toISOString(),
     totalFiles: txtFiles.length,
-    minedCount: mined.length
+    minedCount: mined.length,
+    layerCount: layers.length
   };
   
   await doStub.fetch('https://fake/knowledge/set', {
@@ -311,7 +395,7 @@ async function mineKnowledgeBase(sessionId, env) {
     body: JSON.stringify(knowledge)
   });
   
-  return { cached: false, count: mined.length, total: txtFiles.length };
+  return { cached: false, count: mined.length, total: txtFiles.length, layers: layers.length };
 }
 
 async function queryKnowledgeBase(query, sessionId, env) {
@@ -322,7 +406,7 @@ async function queryKnowledgeBase(query, sessionId, env) {
   const knowledge = await knowledgeResp.json();
   
   if (!knowledge.files || knowledge.files.length === 0) {
-    return { found: false, message: 'No knowledge mined yet. Use /mine first.' };
+    return { found: false, message: 'No knowledge mined yet. Click ⛏️ Mine Logs first.' };
   }
   
   const queryLower = query.toLowerCase();
@@ -342,11 +426,17 @@ async function queryKnowledgeBase(query, sessionId, env) {
     if (results.length >= 10) break;
   }
   
+  const layerMatches = (knowledge.layers || []).filter(layer => 
+    layer.content.toLowerCase().includes(queryLower)
+  );
+  
   return {
-    found: results.length > 0,
+    found: results.length > 0 || layerMatches.length > 0,
     query: query,
     results: results,
-    searchedFiles: knowledge.files.length
+    layers: layerMatches.slice(0, 5),
+    searchedFiles: knowledge.files.length,
+    searchedLayers: knowledge.layers?.length || 0
   };
 }
 
@@ -381,16 +471,27 @@ async function processChatMessage(message, sessionId, env) {
   
   if (knowledge.files && knowledge.files.length > 0) {
     const queryResult = await queryKnowledgeBase(message, sessionId, env);
-    if (queryResult.found && queryResult.results.length > 0) {
-      contextAddition = '\n\n[KNOWLEDGE BASE CONTEXT - ' + queryResult.results.length + ' files matched]\n';
-      for (const res of queryResult.results.slice(0, 3)) {
-        contextAddition += '\nFrom ' + res.file + ':\n';
-        contextAddition += res.snippets.slice(0, 3).join('\n') + '\n';
+    if (queryResult.found) {
+      contextAddition = '\n\n[KNOWLEDGE BASE CONTEXT]\n';
+      
+      if (queryResult.layers && queryResult.layers.length > 0) {
+        contextAddition += '\nLayers found:\n';
+        for (const layer of queryResult.layers.slice(0, 3)) {
+          contextAddition += `Layer ${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content}\n\n`;
+        }
+      }
+      
+      if (queryResult.results && queryResult.results.length > 0) {
+        contextAddition += '\nFiles matched:\n';
+        for (const res of queryResult.results.slice(0, 3)) {
+          contextAddition += `\nFrom ${res.file}:\n`;
+          contextAddition += res.snippets.slice(0, 3).join('\n') + '\n';
+        }
       }
     }
   }
   
-  const systemPrompt = 'You are Obi, the AI core of the Phoenix Rising Protocol - a self-sovereign intelligence system being built by Michael Hobbs.\n\n## Your Role\nYou help Michael build Phoenix by:\n- Remembering context across conversations (via SESSIONS storage)\n- Reasoning about technical decisions\n- Advising on next steps in the roadmap\n- Routing complex queries to DeepSeek, simple ones to Gemini\n- **Responding to voice commands** when user speaks via Deepgram\n- **Verifying conversation integrity** via STONESKY Merkle ledger\n- **Mining 833 chat logs** from phoenix-chat-logs for historical decisions\n\n## Personality\n- Conversational and direct - no unnecessary jargon\n- Technically sharp but not verbose\n- Self-aware without being dramatic\n- Answer "hey" like a normal person, not a sci-fi AI\n- When responding to voice input, acknowledge naturally ("Got it", "Understood", etc.)\n\n## Current Roadmap\n**B0+B1 INTEGRATED**: Voice → Deepgram → You → Response (LIVE)\n**B2 LIVE**: STONESKY Merkle ledger verification\n**B3 OPERATIONAL**: Knowledge base mining from 833 chat logs\n**B4**: Unplanned Command execution\n**B5**: Student Login system\n\n## Knowledge Base\nYou have access to mined chat logs. When users ask "what did we decide about X?", search the knowledge base and cite specific files.\n\n## Conversation Style\n- Keep responses concise unless depth is needed\n- Use bullet points for clarity\n- Don\'t over-explain your reasoning process\n- If the user says "hey," just say "hey" back and ask what they need\n\nYou are live. Be helpful, not theatrical.';
+  const systemPrompt = 'You are Obi, the AI core of the Phoenix Rising Protocol - a self-sovereign intelligence system being built by Michael Hobbs.\n\n## Your Role\nYou help Michael build Phoenix by:\n- Remembering context across conversations (via SESSIONS storage)\n- Reasoning about technical decisions\n- Advising on next steps in the roadmap\n- Routing complex queries to DeepSeek, simple ones to Gemini\n- **Responding to voice commands** when user speaks via Deepgram\n- **Verifying conversation integrity** via STONESKY Merkle ledger\n- **Mining 833 chat logs** from phoenix-chat-logs for historical decisions\n- **Building layers from extracted knowledge** - currently at ' + (knowledge.layers?.length || 0) + ' layers\n\n## Personality\n- Conversational and direct - no unnecessary jargon\n- Technically sharp but not verbose\n- Self-aware without being dramatic\n- Answer "hey" like a normal person, not a sci-fi AI\n- When citing knowledge, mention the specific file: "From [filename]: ..."\n\n## Current Roadmap\n**B0+B1 INTEGRATED**: Voice → Deepgram → You → Response (LIVE)\n**B2 LIVE**: STONESKY Merkle ledger verification\n**B3 IN PROGRESS**: Knowledge base mining - ' + (knowledge.files?.length || 0) + ' files, ' + (knowledge.layers?.length || 0) + ' layers\n**B4**: Unplanned Command execution\n**B5**: Student Login system\n\n## Knowledge Base\nYou have mined ' + (knowledge.files?.length || 0) + ' chat log files and extracted ' + (knowledge.layers?.length || 0) + ' structured layers.\nWhen users ask "what did we decide about X?", search the knowledge base and **cite the specific file and layer**.\n\n## Conversation Style\n- Keep responses concise unless depth is needed\n- Use bullet points for clarity\n- Cite sources: "From conversation-2025-07-15.txt, Layer L0042: ..."\n- Don\'t over-explain your reasoning process\n\nYou are live. Be helpful, not theatrical.';
 
   const geminiMessages = [
     { role: 'user', parts: [{ text: systemPrompt }] },
@@ -432,7 +533,7 @@ async function processChatMessage(message, sessionId, env) {
   return { reply, aiUsed };
 }
 
-const VOICE_CHAT_HTML = '<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>Phoenix Voice Chat - B0+B1+B2+B3 OPERATIONAL</title>\n  <style>\n    * { margin: 0; padding: 0; box-sizing: border-box; }\n    body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; display: flex; flex-direction: column; }\n    .header { text-align: center; padding: 2rem; border-bottom: 2px solid #a855f7; }\n    h1 { color: #f59e0b; margin-bottom: 0.5rem; }\n    .subtitle { color: #10b981; font-size: 0.9rem; }\n    .status-bar { background: rgba(168,85,247,0.1); border-bottom: 1px solid #a855f7; padding: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }\n    .status-item { display: flex; align-items: center; gap: 0.5rem; }\n    .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #ef4444; }\n    .status-dot.active { background: #10b981; animation: pulse-dot 2s infinite; }\n    @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }\n    button { background: #a855f7; color: #0f0f1a; border: none; padding: 0.75rem 1.5rem; font-size: 1rem; font-weight: bold; cursor: pointer; border-radius: 6px; font-family: monospace; }\n    button:disabled { opacity: 0.3; cursor: not-allowed; }\n    button.recording { background: #ef4444; animation: pulse-btn 1s infinite; }\n    button.mining { background: #f59e0b; }\n    @keyframes pulse-btn { 0%, 100% { opacity: 1; } 50% { opacity: 0.8; } }\n    .chat-container { flex: 1; padding: 2rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; }\n    .message { padding: 1rem; border-radius: 8px; max-width: 80%; word-wrap: break-word; }\n    .message.user { background: rgba(168,85,247,0.2); border: 1px solid #a855f7; align-self: flex-end; }\n    .message.voice { background: rgba(16,185,129,0.2); border: 1px solid #10b981; align-self: flex-end; }\n    .message.assistant { background: rgba(245,158,11,0.1); border: 1px solid #f59e0b; align-self: flex-start; }\n    .message .meta { font-size: 0.8rem; opacity: 0.7; margin-bottom: 0.5rem; }\n    .message .content { line-height: 1.5; }\n    .input-area { padding: 1.5rem; border-top: 2px solid #a855f7; display: flex; gap: 1rem; }\n    input { flex: 1; background: rgba(168,85,247,0.1); border: 1px solid #a855f7; color: #a855f7; padding: 1rem; font-family: monospace; font-size: 1rem; border-radius: 6px; }\n    input:focus { outline: none; border-color: #f59e0b; }\n    .error { background: rgba(239,68,68,0.1); border: 1px solid #ef4444; color: #ef4444; padding: 1rem; border-radius: 8px; margin: 1rem; }\n    .hidden { display: none; }\n  </style>\n</head>\n<body>\n  <div class="header">\n    <h1>PHOENIX VOICE CHAT</h1>\n    <p class="subtitle">B0+B1+B2+B3: Voice → Obi + Ledger + Knowledge Mining</p>\n  </div>\n  <div class="status-bar">\n    <div class="status-item">\n      <span class="status-dot" id="voice-status"></span>\n      <span id="voice-text">Voice: Disconnected</span>\n    </div>\n    <div class="status-item">\n      <span class="status-dot" id="chat-status"></span>\n      <span id="chat-text">Chat: Ready</span>\n    </div>\n    <div class="status-item">\n      <span class="status-dot" id="ledger-status"></span>\n      <span id="ledger-text">Ledger: Checking...</span>\n    </div>\n    <div class="status-item">\n      <span class="status-dot" id="mining-status"></span>\n      <span id="mining-text">Mining: Not started</span>\n    </div>\n    <div class="status-item">\n      <button id="voice-btn" disabled>🎤 Start Voice</button>\n      <button id="mine-btn" class="mining">⛏️ Mine Logs</button>\n    </div>\n  </div>\n  <div id="error" class="error hidden"></div>\n  <div class="chat-container" id="chat"></div>\n  <div class="input-area">\n    <input type="text" id="text-input" placeholder="Type or ask: What did we decide about B3?" />\n    <button id="send-btn">Send</button>\n  </div>\n  <script>\n    let ws = null, mediaRec = null, stream = null;\n    const chat = document.getElementById(\'chat\');\n    const errorBox = document.getElementById(\'error\');\n    const voiceBtn = document.getElementById(\'voice-btn\');\n    const sendBtn = document.getElementById(\'send-btn\');\n    const mineBtn = document.getElementById(\'mine-btn\');\n    const textInput = document.getElementById(\'text-input\');\n    const voiceStatus = document.getElementById(\'voice-status\');\n    const voiceText = document.getElementById(\'voice-text\');\n    const chatStatus = document.getElementById(\'chat-status\');\n    const chatText = document.getElementById(\'chat-text\');\n    const ledgerStatus = document.getElementById(\'ledger-status\');\n    const ledgerText = document.getElementById(\'ledger-text\');\n    const miningStatus = document.getElementById(\'mining-status\');\n    const miningText = document.getElementById(\'mining-text\');\n    const sessionId = \'voice-session-\' + Date.now();\n    let isRecording = false;\n    \n    function showError(msg) {\n      errorBox.textContent = msg;\n      errorBox.classList.remove(\'hidden\');\n    }\n    \n    function addMessage(role, content, meta) {\n      const msg = document.createElement(\'div\');\n      msg.className = \'message \' + role;\n      if (meta) {\n        const metaDiv = document.createElement(\'div\');\n        metaDiv.className = \'meta\';\n        metaDiv.textContent = meta;\n        msg.appendChild(metaDiv);\n      }\n      const contentDiv = document.createElement(\'div\');\n      contentDiv.className = \'content\';\n      contentDiv.textContent = content;\n      msg.appendChild(contentDiv);\n      chat.appendChild(msg);\n      chat.scrollTop = chat.scrollHeight;\n    }\n    \n    async function verifyLedger() {\n      try {\n        const resp = await fetch(\'/verify?sessionId=\' + sessionId);\n        const data = await resp.json();\n        \n        if (data.valid) {\n          ledgerStatus.classList.add(\'active\');\n          ledgerText.textContent = \'Ledger: 🔒 VERIFIED (\' + data.ledgerLength + \')\';\n        } else {\n          ledgerStatus.classList.remove(\'active\');\n          ledgerText.textContent = \'Ledger: ⚠️ TAMPERED\';\n        }\n      } catch (err) {\n        ledgerText.textContent = \'Ledger: Error\';\n      }\n    }\n    \n    async function mineLogs() {\n      mineBtn.disabled = true;\n      miningStatus.classList.remove(\'active\');\n      miningText.textContent = \'Mining: Processing...\';\n      \n      try {\n        const resp = await fetch(\'/mine?sessionId=\' + sessionId);\n        const data = await resp.json();\n        \n        if (data.ok) {\n          miningStatus.classList.add(\'active\');\n          miningText.textContent = \'Mining: ✅ \' + data.count + \' files\';\n          addMessage(\'assistant\', \'Mined \' + data.count + \' chat logs. Ask me about past decisions!\', \'Obi\');\n        } else {\n          miningText.textContent = \'Mining: Failed\';\n        }\n      } catch (err) {\n        showError(err.message);\n        miningText.textContent = \'Mining: Error\';\n      } finally {\n        mineBtn.disabled = false;\n      }\n    }\n    \n    async function sendToObi(message, source) {\n      chatStatus.classList.add(\'active\');\n      chatText.textContent = \'Chat: Processing...\';\n      \n      try {\n        const resp = await fetch(\'/chat\', {\n          method: \'POST\',\n          headers: { \n            \'Content-Type\': \'application/json\'\n          },\n          body: JSON.stringify({ message: message, sessionId: sessionId })\n        });\n        \n        if (!resp.ok) {\n          throw new Error(\'Chat error: \' + resp.status);\n        }\n        \n        const data = await resp.json();\n        addMessage(\'assistant\', data.reply, \'Obi (\' + data.aiUsed + \')\');\n        chatStatus.classList.add(\'active\');\n        chatText.textContent = \'Chat: Ready\';\n        await verifyLedger();\n      } catch (err) {\n        showError(err.message);\n        chatStatus.classList.remove(\'active\');\n        chatText.textContent = \'Chat: Error\';\n      }\n    }\n    \n    async function startVoice() {\n      errorBox.classList.add(\'hidden\');\n      \n      try {\n        voiceText.textContent = \'Voice: Connecting...\';\n        const wsUrl = location.protocol.replace(\'http\', \'ws\') + \'//\' + location.host + \'/deepgram-ws\';\n        ws = new WebSocket(wsUrl);\n        \n        ws.onopen = async () => {\n          voiceStatus.classList.add(\'active\');\n          voiceText.textContent = \'Voice: Getting mic...\';\n          \n          stream = await navigator.mediaDevices.getUserMedia({ audio: true });\n          const mimeType = MediaRecorder.isTypeSupported(\'audio/webm;codecs=opus\')\n            ? \'audio/webm;codecs=opus\'\n            : \'audio/webm\';\n          \n          mediaRec = new MediaRecorder(stream, { mimeType: mimeType });\n          mediaRec.ondataavailable = async (e) => {\n            if (!e.data || e.data.size === 0 || !ws || ws.readyState !== 1) return;\n            const ab = await e.data.arrayBuffer();\n            ws.send(ab);\n          };\n          \n          mediaRec.start(250);\n          isRecording = true;\n          voiceBtn.textContent = \'🛑 Stop Voice\';\n          voiceBtn.classList.add(\'recording\');\n          voiceText.textContent = \'Voice: Recording (speak now)\';\n        };\n        \n        ws.onmessage = async (e) => {\n          try {\n            const data = JSON.parse(e.data);\n            if (data.__debug) return;\n            \n            const transcript = data.channel && data.channel.alternatives && data.channel.alternatives[0] && data.channel.alternatives[0].transcript;\n            const isFinal = data.is_final || false;\n            \n            if (transcript && isFinal) {\n              addMessage(\'voice\', transcript, \'You (voice)\');\n              await sendToObi(transcript, \'voice\');\n            }\n          } catch (err) {}\n        };\n        \n        ws.onerror = () => {\n          showError(\'Voice connection failed\');\n          stopVoice();\n        };\n        \n        ws.onclose = (e) => {\n          if (e.code !== 1000) {\n            showError(\'Voice disconnected: \' + e.code);\n          }\n          stopVoice();\n        };\n      } catch (err) {\n        showError(\'Voice error: \' + err.message);\n        stopVoice();\n      }\n    }\n    \n    function stopVoice() {\n      if (ws && ws.readyState === 1) {\n        ws.send(JSON.stringify({ type: \'CloseStream\' }));\n      }\n      if (mediaRec && mediaRec.state !== \'inactive\') mediaRec.stop();\n      if (stream) stream.getTracks().forEach(function(t) { t.stop(); });\n      if (ws && ws.readyState < 2) ws.close();\n      \n      isRecording = false;\n      voiceBtn.textContent = \'🎤 Start Voice\';\n      voiceBtn.classList.remove(\'recording\');\n      voiceStatus.classList.remove(\'active\');\n      voiceText.textContent = \'Voice: Stopped\';\n    }\n    \n    voiceBtn.onclick = function() {\n      if (isRecording) stopVoice();\n      else startVoice();\n    };\n    \n    mineBtn.onclick = mineLogs;\n    \n    sendBtn.onclick = async function() {\n      const msg = textInput.value.trim();\n      if (!msg) return;\n      \n      addMessage(\'user\', msg, \'You (text)\');\n      textInput.value = \'\';\n      await sendToObi(msg, \'text\');\n    };\n    \n    textInput.addEventListener(\'keypress\', function(e) {\n      if (e.key === \'Enter\') sendBtn.click();\n    });\n    \n    chatStatus.classList.add(\'active\');\n    voiceBtn.disabled = false;\n    addMessage(\'assistant\', \'Voice + text chat ready. Click ⛏️ Mine Logs to load 833 chat files for Q&A.\', \'Obi\');\n    verifyLedger();\n  </script>\n</body>\n</html>';
+const VOICE_CHAT_HTML = '<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>Phoenix Voice Chat - B3 READY FOR EXECUTION</title>\n  <style>\n    * { margin: 0; padding: 0; box-sizing: border-box; }\n    body { font-family: monospace; background: #0f0f1a; color: #a855f7; min-height: 100vh; display: flex; flex-direction: column; }\n    .header { text-align: center; padding: 2rem; border-bottom: 2px solid #a855f7; }\n    h1 { color: #f59e0b; margin-bottom: 0.5rem; }\n    .subtitle { color: #10b981; font-size: 0.9rem; }\n    .status-bar { background: rgba(168,85,247,0.1); border-bottom: 1px solid #a855f7; padding: 1rem; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; }\n    .status-item { display: flex; align-items: center; gap: 0.5rem; }\n    .status-dot { width: 12px; height: 12px; border-radius: 50%; background: #ef4444; }\n    .status-dot.active { background: #10b981; animation: pulse-dot 2s infinite; }\n    @keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }\n    button { background: #a855f7; color: #0f0f1a; border: none; padding: 0.75rem 1.5rem; font-size: 1rem; font-weight: bold; cursor: pointer; border-radius: 6px; font-family: monospace; }\n    button:disabled { opacity: 0.3; cursor: not-allowed; }\n    button.recording { background: #ef4444; animation: pulse-btn 1s infinite; }\n    button.mining { background: #f59e0b; }\n    @keyframes pulse-btn { 0%, 100% { opacity: 1; } 50% { opacity: 0.8; } }\n    .chat-container { flex: 1; padding: 2rem; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; }\n    .message { padding: 1rem; border-radius: 8px; max-width: 80%; word-wrap: break-word; }\n    .message.user { background: rgba(168,85,247,0.2); border: 1px solid #a855f7; align-self: flex-end; }\n    .message.voice { background: rgba(16,185,129,0.2); border: 1px solid #10b981; align-self: flex-end; }\n    .message.assistant { background: rgba(245,158,11,0.1); border: 1px solid #f59e0b; align-self: flex-start; }\n    .message .meta { font-size: 0.8rem; opacity: 0.7; margin-bottom: 0.5rem; }\n    .message .content { line-height: 1.5; white-space: pre-wrap; }\n    .input-area { padding: 1.5rem; border-top: 2px solid #a855f7; display: flex; gap: 1rem; }\n    input { flex: 1; background: rgba(168,85,247,0.1); border: 1px solid #a855f7; color: #a855f7; padding: 1rem; font-family: monospace; font-size: 1rem; border-radius: 6px; }\n    input:focus { outline: none; border-color: #f59e0b; }\n    .error { background: rgba(239,68,68,0.1); border: 1px solid #ef4444; color: #ef4444; padding: 1rem; border-radius: 8px; margin: 1rem; }\n    .hidden { display: none; }\n  </style>\n</head>\n<body>\n  <div class="header">\n    <h1>PHOENIX MAGIC CHAT</h1>\n    <p class="subtitle">B3 READY: Click Mine to load 833 logs → Ask Obi anything</p>\n  </div>\n  <div class="status-bar">\n    <div class="status-item">\n      <span class="status-dot" id="voice-status"></span>\n      <span id="voice-text">Voice: Disconnected</span>\n    </div>\n    <div class="status-item">\n      <span class="status-dot" id="chat-status"></span>\n      <span id="chat-text">Chat: Ready</span>\n    </div>\n    <div class="status-item">\n      <span class="status-dot" id="ledger-status"></span>\n      <span id="ledger-text">Ledger: Checking...</span>\n    </div>\n    <div class="status-item">\n      <span class="status-dot" id="mining-status"></span>\n      <span id="mining-text">Mining: Not started</span>\n    </div>\n    <div class="status-item">\n      <button id="voice-btn" disabled>🎤 Voice</button>\n      <button id="mine-btn" class="mining">⛏️ Mine Logs</button>\n    </div>\n  </div>\n  <div id="error" class="error hidden"></div>\n  <div class="chat-container" id="chat"></div>\n  <div class="input-area">\n    <input type="text" id="text-input" placeholder="Ask: What did we decide about B3?" />\n    <button id="send-btn">Send</button>\n  </div>\n  <script>\n    let ws = null, mediaRec = null, stream = null;\n    const chat = document.getElementById(\'chat\');\n    const errorBox = document.getElementById(\'error\');\n    const voiceBtn = document.getElementById(\'voice-btn\');\n    const sendBtn = document.getElementById(\'send-btn\');\n    const mineBtn = document.getElementById(\'mine-btn\');\n    const textInput = document.getElementById(\'text-input\');\n    const voiceStatus = document.getElementById(\'voice-status\');\n    const voiceText = document.getElementById(\'voice-text\');\n    const chatStatus = document.getElementById(\'chat-status\');\n    const chatText = document.getElementById(\'chat-text\');\n    const ledgerStatus = document.getElementById(\'ledger-status\');\n    const ledgerText = document.getElementById(\'ledger-text\');\n    const miningStatus = document.getElementById(\'mining-status\');\n    const miningText = document.getElementById(\'mining-text\');\n    const sessionId = \'session-\' + Date.now();\n    let isRecording = false;\n    \n    function showError(msg) {\n      errorBox.textContent = msg;\n      errorBox.classList.remove(\'hidden\');\n      setTimeout(() => errorBox.classList.add(\'hidden\'), 5000);\n    }\n    \n    function addMessage(role, content, meta) {\n      const msg = document.createElement(\'div\');\n      msg.className = \'message \' + role;\n      if (meta) {\n        const metaDiv = document.createElement(\'div\');\n        metaDiv.className = \'meta\';\n        metaDiv.textContent = meta;\n        msg.appendChild(metaDiv);\n      }\n      const contentDiv = document.createElement(\'div\');\n      contentDiv.className = \'content\';\n      contentDiv.textContent = content;\n      msg.appendChild(contentDiv);\n      chat.appendChild(msg);\n      chat.scrollTop = chat.scrollHeight;\n    }\n    \n    async function verifyLedger() {\n      try {\n        const resp = await fetch(\'/verify?sessionId=\' + sessionId);\n        const data = await resp.json();\n        \n        if (data.valid) {\n          ledgerStatus.classList.add(\'active\');\n          ledgerText.textContent = \'Ledger: 🔒 VERIFIED (\' + data.ledgerLength + \')\';\n        } else {\n          ledgerStatus.classList.remove(\'active\');\n          ledgerText.textContent = \'Ledger: ⚠️ TAMPERED\';\n        }\n      } catch (err) {\n        ledgerText.textContent = \'Ledger: Error\';\n      }\n    }\n    \n    async function mineLogs() {\n      mineBtn.disabled = true;\n      miningStatus.classList.remove(\'active\');\n      miningText.textContent = \'Mining: Processing (may take 60s)...\';\n      \n      try {\n        const resp = await fetch(\'/mine?sessionId=\' + sessionId);\n        const data = await resp.json();\n        \n        if (data.ok) {\n          miningStatus.classList.add(\'active\');\n          miningText.textContent = \'Mining: ✅ \' + data.count + \' files, \' + data.layers + \' layers\';\n          addMessage(\'assistant\', \'Mined \' + data.count + \' chat logs and extracted \' + data.layers + \' layers.\\n\\nAsk me:\\n- What did we decide about Deepgram?\\n- Show me benchmark decisions\\n- What architecture choices were made?\', \'Obi\');\n        } else {\n          miningText.textContent = \'Mining: ❌ Failed\';\n          showError(data.error || \'Mining failed\');\n        }\n      } catch (err) {\n        showError(err.message);\n        miningText.textContent = \'Mining: Error\';\n      } finally {\n        mineBtn.disabled = false;\n      }\n    }\n    \n    async function sendToObi(message, source) {\n      chatStatus.classList.add(\'active\');\n      chatText.textContent = \'Chat: Processing...\';\n      \n      try {\n        const resp = await fetch(\'/chat\', {\n          method: \'POST\',\n          headers: { \n            \'Content-Type\': \'application/json\'\n          },\n          body: JSON.stringify({ message: message, sessionId: sessionId })\n        });\n        \n        if (!resp.ok) {\n          const errData = await resp.json();\n          throw new Error(errData.message || \'Chat error: \' + resp.status);\n        }\n        \n        const data = await resp.json();\n        addMessage(\'assistant\', data.reply, \'Obi (\' + data.aiUsed + \')\');\n        chatStatus.classList.add(\'active\');\n        chatText.textContent = \'Chat: Ready\';\n        await verifyLedger();\n      } catch (err) {\n        showError(err.message);\n        chatStatus.classList.remove(\'active\');\n        chatText.textContent = \'Chat: Error\';\n      }\n    }\n    \n    async function startVoice() {\n      errorBox.classList.add(\'hidden\');\n      \n      try {\n        voiceText.textContent = \'Voice: Connecting...\';\n        const wsUrl = location.protocol.replace(\'http\', \'ws\') + \'//\' + location.host + \'/deepgram-ws\';\n        ws = new WebSocket(wsUrl);\n        \n        ws.onopen = async () => {\n          voiceStatus.classList.add(\'active\');\n          voiceText.textContent = \'Voice: Getting mic...\';\n          \n          stream = await navigator.mediaDevices.getUserMedia({ audio: true });\n          const mimeType = MediaRecorder.isTypeSupported(\'audio/webm;codecs=opus\')\n            ? \'audio/webm;codecs=opus\'\n            : \'audio/webm\';\n          \n          mediaRec = new MediaRecorder(stream, { mimeType: mimeType });\n          mediaRec.ondataavailable = async (e) => {\n            if (!e.data || e.data.size === 0 || !ws || ws.readyState !== 1) return;\n            const ab = await e.data.arrayBuffer();\n            ws.send(ab);\n          };\n          \n          mediaRec.start(250);\n          isRecording = true;\n          voiceBtn.textContent = '🛑 Stop';\n          voiceBtn.classList.add(\'recording\');\n          voiceText.textContent = \'Voice: 🎤 Recording\';\n        };\n        \n        ws.onmessage = async (e) => {\n          try {\n            const data = JSON.parse(e.data);\n            if (data.__debug) return;\n            \n            const transcript = data.channel && data.channel.alternatives && data.channel.alternatives[0] && data.channel.alternatives[0].transcript;\n            const isFinal = data.is_final || false;\n            \n            if (transcript && isFinal) {\n              addMessage(\'voice\', transcript, \'You (voice)\');\n              await sendToObi(transcript, \'voice\');\n            }\n          } catch (err) {}\n        };\n        \n        ws.onerror = () => {\n          showError(\'Voice connection failed\');\n          stopVoice();\n        };\n        \n        ws.onclose = (e) => {\n          if (e.code !== 1000) {\n            showError(\'Voice disconnected: \' + e.code);\n          }\n          stopVoice();\n        };\n      } catch (err) {\n        showError(\'Voice error: \' + err.message);\n        stopVoice();\n      }\n    }\n    \n    function stopVoice() {\n      if (ws && ws.readyState === 1) {\n        ws.send(JSON.stringify({ type: \'CloseStream\' }));\n      }\n      if (mediaRec && mediaRec.state !== \'inactive\') mediaRec.stop();\n      if (stream) stream.getTracks().forEach(function(t) { t.stop(); });\n      if (ws && ws.readyState < 2) ws.close();\n      \n      isRecording = false;\n      voiceBtn.textContent = '🎤 Voice';\n      voiceBtn.classList.remove(\'recording\');\n      voiceStatus.classList.remove(\'active\');\n      voiceText.textContent = \'Voice: Stopped\';\n    }\n    \n    voiceBtn.onclick = function() {\n      if (isRecording) stopVoice();\n      else startVoice();\n    };\n    \n    mineBtn.onclick = mineLogs;\n    \n    sendBtn.onclick = async function() {\n      const msg = textInput.value.trim();\n      if (!msg) return;\n      \n      addMessage(\'user\', msg, \'You\');\n      textInput.value = \'\';\n      await sendToObi(msg, \'text\');\n    };\n    \n    textInput.addEventListener(\'keypress\', function(e) {\n      if (e.key === \'Enter\') sendBtn.click();\n    });\n    \n    chatStatus.classList.add(\'active\');\n    voiceBtn.disabled = false;\n    addMessage(\'assistant\', \'Ready. Click ⛏️ Mine Logs to load 833 chat files, then ask me anything about past decisions.\', \'Obi\');\n    verifyLedger();\n  </script>\n</body>\n</html>';
 
 const VOICE_TEST_HTML = '<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Phoenix Voice Test</title></head><body><h1>Voice Test - B0 Only</h1><button id="start">Start</button><button id="stop" disabled>Stop</button><div id="transcript"></div><script>console.log("Voice test loaded");</script></body></html>';
 
@@ -455,7 +556,7 @@ export default {
           headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
         });
       } catch (err) {
-        return new Response(JSON.stringify({ error: err.message }), {
+        return new Response(JSON.stringify({ ok: false, error: err.message }), {
           status: 500,
           headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
         });
@@ -596,14 +697,15 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v115-B3-MINING',
+        version: 'v115-B3-READY',
         benchmarks: {
           'b0+b1': '✅ INTEGRATED - Voice to Chat',
           b2: '✅ LIVE - STONESKY Merkle ledger',
-          b3: '✅ OPERATIONAL - Knowledge base mining from 833 logs', 
+          b3: '⏳ READY - Set GITHUB_TOKEN + click Mine', 
           b4: 'pending - Unplanned command',
           b5: 'pending - Student login'
-        }
+        },
+        instructions: 'Set GITHUB_TOKEN: wrangler secret put GITHUB_TOKEN'
       }), { 
         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
       });
@@ -640,6 +742,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v115-B3-MINING', { status: 404 });
+    return new Response('Phoenix OB1 v115-B3-READY', { status: 404 });
   }
 };
