@@ -38,7 +38,9 @@ jobs:
           WRANGLER_LOG: debug
         run: |
           npx wrangler --version
-          npx wrangler deploy --config ./wrangler.toml ./reincarnate.js
+          npx wrangler deploy --config ./wrangler.toml ./reincarnate.js 2>&1 | tee wrangler.out
+          echo "=== REAL_URL_LINES ==="
+          grep -E "workers.dev|https://|Deployed|Uploaded|Current Deployment|Name:" wrangler.out || true
 
       - name: Print Wrangler logs on failure
         if: failure()
@@ -50,8 +52,7 @@ jobs:
       - name: Deployment Summary
         if: success()
         run: |
-          echo "✅ Phoenix OB1 System deployed successfully!"
-          echo "📦 Version: v1.6.1-B0-DEPLOY"
-          echo "🔗 Worker: https://phoenix-ob1-system.mrmichaelhobbs1234.workers.dev"
-          echo "🎯 B0 Voice: /test-voice.html"
-          echo "🗣️ B1 Chat: /magic-chat"
+          NAME=$(grep -E '^name\\s*=' wrangler.toml | head -n1 | cut -d'"' -f2)
+          echo "✅ Deploy finished"
+          echo "Worker Name: $NAME"
+          echo "Copy the REAL workers.dev URL from the REAL_URL_LINES block above."
