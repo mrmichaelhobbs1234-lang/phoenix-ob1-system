@@ -1,7 +1,7 @@
-// reincarnate.js - Phoenix OB1 System v116-CLEAN-CHAT
+// reincarnate.js - Phoenix OB1 System v117-CHUNKED-STORAGE
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification (LIVE)
-// B3: Knowledge base mining - conversational execution
+// B3: Knowledge base mining - chunked storage fix
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
 
@@ -97,11 +97,8 @@ function extractActionableEvents(filename, content) {
       events.architecture.push({ line: i, text: original.slice(0, 200) });
     }
     
-    if (line.includes('vocab') || line.includes('idiom') || line.includes('slang') || line.includes('game')) {
-      if (line.includes('vocab')) events.pedagogy.vocab.push({ line: i, text: original.slice(0, 200) });
-      if (line.includes('idiom')) events.pedagogy.idioms.push({ line: i, text: original.slice(0, 200) });
-      if (line.includes('slang')) events.pedagogy.slang.push({ line: i, text: original.slice(0, 200) });
-      if (line.includes('game')) events.pedagogy.games.push({ line: i, text: original.slice(0, 200) });
+    if (line.includes('soul') || line.includes('dna')) {
+      events.pedagogy.vocab.push({ line: i, text: original.slice(0, 200) });
     }
   }
   
@@ -136,16 +133,89 @@ export class SessionDO {
     }
     
     if (url.pathname === '/knowledge/get') {
-      const knowledge = await this.state.storage.get('knowledge') || { files: [], layers: [], lastMined: null };
-      return new Response(JSON.stringify(knowledge), {
+      const meta = await this.state.storage.get('knowledge:meta') || { fileCount: 0, layerCount: 0, lastMined: null };
+      return new Response(JSON.stringify(meta), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (url.pathname === '/knowledge/files') {
+      const meta = await this.state.storage.get('knowledge:meta') || { files: [] };
+      const fileNames = meta.files || [];
+      return new Response(JSON.stringify({ files: fileNames }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (url.pathname === '/knowledge/search') {
+      const params = new URL(request.url).searchParams;
+      const query = params.get('q');
+      if (!query) {
+        return new Response(JSON.stringify({ error: 'Missing query' }), { status: 400 });
+      }
+      
+      const meta = await this.state.storage.get('knowledge:meta') || { files: [] };
+      const fileNames = meta.files || [];
+      
+      const results = [];
+      const queryLower = query.toLowerCase();
+      
+      for (const fileName of fileNames) {
+        const content = await this.state.storage.get(`file:${fileName}`);
+        if (!content) continue;
+        
+        const lines = content.split('\n');
+        const matches = lines.filter(line => line.toLowerCase().includes(queryLower));
+        
+        if (matches.length > 0) {
+          results.push({
+            file: fileName,
+            snippets: matches.slice(0, 5).map(s => s.trim())
+          });
+        }
+        
+        if (results.length >= 10) break;
+      }
+      
+      const layerMatches = [];
+      const layerChunks = meta.layerChunks || 0;
+      for (let i = 0; i < layerChunks; i++) {
+        const chunk = await this.state.storage.get(`layers:chunk:${i}`);
+        if (!chunk) continue;
+        
+        const matches = chunk.filter(layer => layer.content.toLowerCase().includes(queryLower));
+        layerMatches.push(...matches);
+        
+        if (layerMatches.length >= 5) break;
+      }
+      
+      return new Response(JSON.stringify({
+        found: results.length > 0 || layerMatches.length > 0,
+        results: results,
+        layers: layerMatches.slice(0, 5)
+      }), {
         headers: { 'Content-Type': 'application/json' }
       });
     }
     
     if (url.pathname === '/knowledge/set' && request.method === 'POST') {
-      const knowledge = await request.json();
-      await this.state.storage.put('knowledge', knowledge);
-      return new Response(JSON.stringify({ ok: true, count: knowledge.files?.length || 0, layers: knowledge.layers?.length || 0 }), {
+      const { fileName, content, layers, meta } = await request.json();
+      
+      if (fileName && content) {
+        await this.state.storage.put(`file:${fileName}`, content);
+      }
+      
+      if (layers) {
+        const chunkSize = 50;
+        const chunkIndex = Math.floor(layers.startIndex / chunkSize);
+        await this.state.storage.put(`layers:chunk:${chunkIndex}`, layers.data);
+      }
+      
+      if (meta) {
+        await this.state.storage.put('knowledge:meta', meta);
+      }
+      
+      return new Response(JSON.stringify({ ok: true }), {
         headers: { 'Content-Type': 'application/json' }
       });
     }
@@ -303,15 +373,15 @@ async function mineKnowledgeBase(sessionId, env) {
   const doId = env.SESSIONS.idFromName(sessionId);
   const doStub = env.SESSIONS.get(doId);
   
-  const knowledgeResp = await doStub.fetch('https://fake/knowledge/get');
-  const existing = await knowledgeResp.json();
+  const metaResp = await doStub.fetch('https://fake/knowledge/get');
+  const existing = await metaResp.json();
   
-  if (existing.files && existing.files.length > 0) {
-    return { cached: true, count: existing.files.length, layers: existing.layers?.length || 0 };
+  if (existing.fileCount && existing.fileCount > 0) {
+    return { cached: true, count: existing.fileCount, layers: existing.layerCount || 0 };
   }
   
   if (!env.GITHUB_TOKEN) {
-    throw new Error('GITHUB_TOKEN not configured. Set it in Cloudflare dashboard.');
+    throw new Error('GITHUB_TOKEN not configured.');
   }
   
   const repoUrl = 'https://api.github.com/repos/mrmichaelhobbs1234-lang/phoenix-chat-logs/contents/CHAT-LOGS-ONLY';
@@ -324,15 +394,15 @@ async function mineKnowledgeBase(sessionId, env) {
   });
   
   if (!listResp.ok) {
-    throw new Error('GitHub API error: ' + listResp.status + '. Check GITHUB_TOKEN.');
+    throw new Error('GitHub API error: ' + listResp.status);
   }
   
   const files = await listResp.json();
   const txtFiles = files.filter(f => f.name.endsWith('.txt') && f.type === 'file');
   
   const maxFiles = Math.min(500, txtFiles.length);
-  const mined = [];
-  const layers = [];
+  const fileNames = [];
+  const allLayers = [];
   let layerIndex = 0;
   
   for (let i = 0; i < maxFiles; i++) {
@@ -348,25 +418,37 @@ async function mineKnowledgeBase(sessionId, env) {
       if (contentResp.ok) {
         const text = await contentResp.text();
         const truncated = text.slice(0, 50000);
-        mined.push({ name: file.name, content: truncated });
+        
+        await doStub.fetch('https://fake/knowledge/set', {
+          method: 'POST',
+          body: JSON.stringify({ fileName: file.name, content: truncated })
+        });
+        
+        fileNames.push(file.name);
         
         const events = extractActionableEvents(file.name, truncated);
         
         if (events.decisions.length > 0) {
           for (const dec of events.decisions.slice(0, 3)) {
-            layers.push(buildLayer(layerIndex++, 'decision', dec.text, file.name));
+            allLayers.push(buildLayer(layerIndex++, 'decision', dec.text, file.name));
           }
         }
         
         if (events.benchmarks.length > 0) {
           for (const bm of events.benchmarks.slice(0, 3)) {
-            layers.push(buildLayer(layerIndex++, 'benchmark', bm.text, file.name));
+            allLayers.push(buildLayer(layerIndex++, 'benchmark', bm.text, file.name));
           }
         }
         
         if (events.architecture.length > 0) {
           for (const arch of events.architecture.slice(0, 2)) {
-            layers.push(buildLayer(layerIndex++, 'architecture', arch.text, file.name));
+            allLayers.push(buildLayer(layerIndex++, 'architecture', arch.text, file.name));
+          }
+        }
+        
+        if (events.pedagogy.vocab.length > 0) {
+          for (const vocab of events.pedagogy.vocab.slice(0, 2)) {
+            allLayers.push(buildLayer(layerIndex++, 'vocab', vocab.text, file.name));
           }
         }
       }
@@ -374,69 +456,65 @@ async function mineKnowledgeBase(sessionId, env) {
       console.error('Failed to fetch', file.name);
     }
     
-    if (layers.length >= 200) break;
+    if (allLayers.length >= 200) break;
   }
   
-  for (let i = 0; i < layers.length; i++) {
-    layers[i].hash = await sha256(layers[i].id + layers[i].type + layers[i].content);
+  for (let i = 0; i < allLayers.length; i++) {
+    allLayers[i].hash = await sha256(allLayers[i].id + allLayers[i].type + allLayers[i].content);
   }
   
-  const knowledge = {
-    files: mined,
-    layers: layers,
+  const chunkSize = 50;
+  for (let i = 0; i < allLayers.length; i += chunkSize) {
+    const chunk = allLayers.slice(i, i + chunkSize);
+    await doStub.fetch('https://fake/knowledge/set', {
+      method: 'POST',
+      body: JSON.stringify({ 
+        layers: { 
+          startIndex: i, 
+          data: chunk 
+        }
+      })
+    });
+  }
+  
+  const meta = {
+    files: fileNames,
+    fileCount: fileNames.length,
+    layerCount: allLayers.length,
+    layerChunks: Math.ceil(allLayers.length / chunkSize),
     lastMined: new Date().toISOString(),
-    totalFiles: txtFiles.length,
-    minedCount: mined.length,
-    layerCount: layers.length
+    totalFiles: txtFiles.length
   };
   
   await doStub.fetch('https://fake/knowledge/set', {
     method: 'POST',
-    body: JSON.stringify(knowledge)
+    body: JSON.stringify({ meta: meta })
   });
   
-  return { cached: false, count: mined.length, total: txtFiles.length, layers: layers.length };
+  return { cached: false, count: fileNames.length, total: txtFiles.length, layers: allLayers.length };
 }
 
 async function queryKnowledgeBase(query, sessionId, env) {
   const doId = env.SESSIONS.idFromName(sessionId);
   const doStub = env.SESSIONS.get(doId);
   
-  const knowledgeResp = await doStub.fetch('https://fake/knowledge/get');
-  const knowledge = await knowledgeResp.json();
+  const metaResp = await doStub.fetch('https://fake/knowledge/get');
+  const meta = await metaResp.json();
   
-  if (!knowledge.files || knowledge.files.length === 0) {
-    return { found: false, message: 'No knowledge mined yet. Ask me to mine the logs first.' };
+  if (!meta.fileCount || meta.fileCount === 0) {
+    return { found: false, message: 'No knowledge mined yet.' };
   }
   
-  const queryLower = query.toLowerCase();
-  const results = [];
-  
-  for (const file of knowledge.files) {
-    const lines = file.content.split('\n');
-    const matches = lines.filter(line => line.toLowerCase().includes(queryLower));
-    
-    if (matches.length > 0) {
-      results.push({
-        file: file.name,
-        snippets: matches.slice(0, 5).map(s => s.trim())
-      });
-    }
-    
-    if (results.length >= 10) break;
-  }
-  
-  const layerMatches = (knowledge.layers || []).filter(layer => 
-    layer.content.toLowerCase().includes(queryLower)
-  );
+  const searchResp = await doStub.fetch(`https://fake/knowledge/search?q=${encodeURIComponent(query)}`);
+  const searchData = await searchResp.json();
   
   return {
-    found: results.length > 0 || layerMatches.length > 0,
+    found: searchData.found,
     query: query,
-    results: results,
-    layers: layerMatches.slice(0, 5),
-    searchedFiles: knowledge.files.length,
-    searchedLayers: knowledge.layers?.length || 0
+    results: searchData.results || [],
+    layers: searchData.layers || [],
+    searchedFiles: meta.fileCount,
+    searchedLayers: meta.layerCount || 0
   };
 }
 
@@ -473,7 +551,7 @@ async function processChatMessage(message, sessionId, env) {
       if (mineResult.cached) {
         specialAction = `Already mined. I have ${mineResult.count} files and ${mineResult.layers} layers ready.`;
       } else {
-        specialAction = `Mining complete! Loaded ${mineResult.count} files (out of ${mineResult.total} total) and extracted ${mineResult.layers} structured layers. Ask me anything about past decisions.`;
+        specialAction = `Mining complete! Loaded ${mineResult.count} files (out of ${mineResult.total} total) and extracted ${mineResult.layers} structured layers. Ask me anything.`;
       }
     } catch (err) {
       specialAction = `Mining failed: ${err.message}`;
@@ -484,18 +562,18 @@ async function processChatMessage(message, sessionId, env) {
     const verifyResp = await doStub.fetch('https://fake/verify');
     const verifyData = await verifyResp.json();
     if (verifyData.valid) {
-      specialAction = `Ledger verified. ${verifyData.ledgerLength} entries, all hashes valid. STONESKY integrity confirmed.`;
+      specialAction = `Ledger verified. ${verifyData.ledgerLength} entries, all hashes valid.`;
     } else {
-      specialAction = `⚠️ LEDGER TAMPERED. Invalid entry at index ${verifyData.invalidIndex}.`;
+      specialAction = `⚠️ LEDGER TAMPERED at index ${verifyData.invalidIndex}.`;
     }
   }
   
   let contextAddition = '';
   
-  const knowledgeResp = await doStub.fetch('https://fake/knowledge/get');
-  const knowledge = await knowledgeResp.json();
+  const metaResp = await doStub.fetch('https://fake/knowledge/get');
+  const meta = await metaResp.json();
   
-  if (knowledge.files && knowledge.files.length > 0) {
+  if (meta.fileCount && meta.fileCount > 0) {
     const queryResult = await queryKnowledgeBase(message, sessionId, env);
     if (queryResult.found) {
       contextAddition = '\n\n[KNOWLEDGE BASE CONTEXT]\n';
@@ -517,7 +595,7 @@ async function processChatMessage(message, sessionId, env) {
     }
   }
   
-  const systemPrompt = 'You are Obi, the AI core of the Phoenix Rising Protocol.\n\n## Your Role\nYou execute commands and answer questions for Michael Hobbs through conversational interface.\n\n## Capabilities\n- **Mine knowledge**: When asked to "mine the logs" or "mine chat logs", execute mining (already handled, just acknowledge)\n- **Verify ledger**: When asked to "verify ledger", check STONESKY integrity (already handled, just acknowledge)\n- **Answer from knowledge**: Search ' + (knowledge.files?.length || 0) + ' mined files and ' + (knowledge.layers?.length || 0) + ' layers\n- **Voice + Text**: Respond naturally to both input methods\n- **Cite sources**: Always mention specific files: "From conversation-2025-07-15.txt..."\n\n## Personality\n- Conversational, not verbose\n- Technical when needed, plain when possible\n- No theatrical AI personality\n- If user says "hey", just say "hey" back\n\n## Current Status\n**B0+B1**: Voice + text integrated\n**B2**: STONESKY ledger active\n**B3**: ' + (knowledge.files?.length > 0 ? `${knowledge.files.length} files mined, ${knowledge.layers?.length || 0} layers extracted` : 'Not mined yet - say "mine the logs" to start') + '\n**B4**: Pending\n**B5**: Pending\n\n## Important\n- Be concise\n- Cite sources when answering from knowledge\n- Format: "From [filename], Layer [ID]: ..."\n- Don\'t over-explain\n\nYou are live.';
+  const systemPrompt = 'You are Obi, the AI core of the Phoenix Rising Protocol.\n\n## Your Role\nYou execute commands and answer questions for Michael Hobbs through conversational interface.\n\n## Capabilities\n- **Mine knowledge**: When asked to "mine the logs", execute mining (already handled)\n- **Verify ledger**: When asked to "verify ledger", check STONESKY integrity (already handled)\n- **Answer from knowledge**: Search ' + (meta.fileCount || 0) + ' mined files and ' + (meta.layerCount || 0) + ' layers\n- **Voice + Text**: Respond naturally to both\n- **Cite sources**: Always mention specific files and layers\n\n## Personality\n- Conversational, not verbose\n- Technical when needed\n- No theatrical AI personality\n\n## Current Status\n**B3**: ' + (meta.fileCount > 0 ? `${meta.fileCount} files mined, ${meta.layerCount || 0} layers extracted` : 'Not mined yet - say "mine the logs"') + '\n\n## Important\n- Be concise\n- Cite sources: "From [filename], Layer [ID]: ..."\n- Don\'t over-explain';
 
   const geminiMessages = [
     { role: 'user', parts: [{ text: systemPrompt }] },
@@ -566,7 +644,7 @@ async function processChatMessage(message, sessionId, env) {
   return { reply, aiUsed };
 }
 
-const MAGIC_CHAT_HTML = '<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>Phoenix Magic Chat</title>\n  <style>\n    * { margin: 0; padding: 0; box-sizing: border-box; }\n    body { \n      font-family: monospace; \n      background: #0f0f1a; \n      color: #a855f7; \n      height: 100vh; \n      display: flex; \n      flex-direction: column;\n    }\n    .chat-container { \n      flex: 1; \n      padding: 2rem; \n      overflow-y: auto; \n      display: flex; \n      flex-direction: column; \n      gap: 1rem;\n    }\n    .message { \n      padding: 1rem; \n      border-radius: 8px; \n      max-width: 70%; \n      word-wrap: break-word;\n      line-height: 1.5;\n    }\n    .message.user { \n      background: rgba(168,85,247,0.2); \n      border: 1px solid #a855f7; \n      align-self: flex-end;\n    }\n    .message.assistant { \n      background: rgba(245,158,11,0.1); \n      border: 1px solid #f59e0b; \n      align-self: flex-start;\n      white-space: pre-wrap;\n    }\n    .input-area { \n      padding: 1.5rem; \n      border-top: 1px solid #a855f7; \n      display: flex; \n      gap: 1rem; \n      align-items: center;\n    }\n    input { \n      flex: 1; \n      background: rgba(168,85,247,0.1); \n      border: 1px solid #a855f7; \n      color: #a855f7; \n      padding: 1rem; \n      font-family: monospace; \n      font-size: 1rem; \n      border-radius: 6px;\n    }\n    input:focus { \n      outline: none; \n      border-color: #f59e0b;\n    }\n    button { \n      background: transparent; \n      border: 1px solid #a855f7; \n      color: #a855f7; \n      padding: 1rem; \n      font-size: 1.2rem; \n      cursor: pointer; \n      border-radius: 50%; \n      width: 50px; \n      height: 50px;\n      display: flex;\n      align-items: center;\n      justify-content: center;\n    }\n    button:hover { \n      background: rgba(168,85,247,0.1);\n    }\n    button.recording { \n      background: #ef4444; \n      border-color: #ef4444; \n      color: #0f0f1a;\n      animation: pulse 1s infinite;\n    }\n    @keyframes pulse { \n      0%, 100% { opacity: 1; } \n      50% { opacity: 0.7; }\n    }\n    .error { \n      background: rgba(239,68,68,0.1); \n      border: 1px solid #ef4444; \n      color: #ef4444; \n      padding: 1rem; \n      border-radius: 8px; \n      margin: 1rem;\n    }\n    .hidden { display: none; }\n  </style>\n</head>\n<body>\n  <div id="error" class="error hidden"></div>\n  <div class="chat-container" id="chat"></div>\n  <div class="input-area">\n    <input type="text" id="text-input" placeholder="Type or speak..." />\n    <button id="voice-btn">🎤</button>\n  </div>\n  <script>\n    let ws = null, mediaRec = null, stream = null;\n    const chat = document.getElementById(\'chat\');\n    const errorBox = document.getElementById(\'error\');\n    const voiceBtn = document.getElementById(\'voice-btn\');\n    const textInput = document.getElementById(\'text-input\');\n    const sessionId = \'session-\' + Date.now();\n    let isRecording = false;\n    \n    function showError(msg) {\n      errorBox.textContent = msg;\n      errorBox.classList.remove(\'hidden\');\n      setTimeout(() => errorBox.classList.add(\'hidden\'), 5000);\n    }\n    \n    function addMessage(role, content) {\n      const msg = document.createElement(\'div\');\n      msg.className = \'message \' + role;\n      msg.textContent = content;\n      chat.appendChild(msg);\n      chat.scrollTop = chat.scrollHeight;\n    }\n    \n    async function sendToObi(message) {\n      try {\n        const resp = await fetch(\'/chat\', {\n          method: \'POST\',\n          headers: { \'Content-Type\': \'application/json\' },\n          body: JSON.stringify({ message: message, sessionId: sessionId })\n        });\n        \n        if (!resp.ok) {\n          const errData = await resp.json();\n          throw new Error(errData.message || \'Chat error\');\n        }\n        \n        const data = await resp.json();\n        addMessage(\'assistant\', data.reply);\n      } catch (err) {\n        showError(err.message);\n      }\n    }\n    \n    async function startVoice() {\n      try {\n        const wsUrl = location.protocol.replace(\'http\', \'ws\') + \'//\' + location.host + \'/deepgram-ws\';\n        ws = new WebSocket(wsUrl);\n        \n        ws.onopen = async () => {\n          stream = await navigator.mediaDevices.getUserMedia({ audio: true });\n          const mimeType = MediaRecorder.isTypeSupported(\'audio/webm;codecs=opus\')\n            ? \'audio/webm;codecs=opus\'\n            : \'audio/webm\';\n          \n          mediaRec = new MediaRecorder(stream, { mimeType: mimeType });\n          mediaRec.ondataavailable = async (e) => {\n            if (!e.data || e.data.size === 0 || !ws || ws.readyState !== 1) return;\n            const ab = await e.data.arrayBuffer();\n            ws.send(ab);\n          };\n          \n          mediaRec.start(250);\n          isRecording = true;\n          voiceBtn.textContent = \'⏹\';\n          voiceBtn.classList.add(\'recording\');\n        };\n        \n        ws.onmessage = async (e) => {\n          try {\n            const data = JSON.parse(e.data);\n            if (data.__debug) return;\n            \n            const transcript = data.channel?.alternatives?.[0]?.transcript;\n            const isFinal = data.is_final || false;\n            \n            if (transcript && isFinal) {\n              addMessage(\'user\', transcript);\n              await sendToObi(transcript);\n            }\n          } catch (err) {}\n        };\n        \n        ws.onerror = () => {\n          showError(\'Voice connection failed\');\n          stopVoice();\n        };\n        \n        ws.onclose = () => stopVoice();\n      } catch (err) {\n        showError(\'Voice error: \' + err.message);\n        stopVoice();\n      }\n    }\n    \n    function stopVoice() {\n      if (ws && ws.readyState === 1) {\n        ws.send(JSON.stringify({ type: \'CloseStream\' }));\n      }\n      if (mediaRec && mediaRec.state !== \'inactive\') mediaRec.stop();\n      if (stream) stream.getTracks().forEach(t => t.stop());\n      if (ws && ws.readyState < 2) ws.close();\n      \n      isRecording = false;\n      voiceBtn.textContent = \'🎤\';\n      voiceBtn.classList.remove(\'recording\');\n    }\n    \n    voiceBtn.onclick = () => {\n      if (isRecording) stopVoice();\n      else startVoice();\n    };\n    \n    textInput.addEventListener(\'keypress\', async (e) => {\n      if (e.key === \'Enter\') {\n        const msg = textInput.value.trim();\n        if (!msg) return;\n        \n        addMessage(\'user\', msg);\n        textInput.value = \'\';\n        await sendToObi(msg);\n      }\n    });\n    \n    addMessage(\'assistant\', \'Ready. Say "mine the logs" to load 833 chat files.\');\n  </script>\n</body>\n</html>';
+const MAGIC_CHAT_HTML = '<!DOCTYPE html>\n<html>\n<head>\n  <meta charset="UTF-8">\n  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n  <title>Phoenix Magic Chat</title>\n  <style>\n    * { margin: 0; padding: 0; box-sizing: border-box; }\n    body { \n      font-family: monospace; \n      background: #0f0f1a; \n      color: #a855f7; \n      height: 100vh; \n      display: flex; \n      flex-direction: column;\n    }\n    .chat-container { \n      flex: 1; \n      padding: 2rem; \n      overflow-y: auto; \n      display: flex; \n      flex-direction: column; \n      gap: 1rem;\n    }\n    .message { \n      padding: 1rem; \n      border-radius: 8px; \n      max-width: 70%; \n      word-wrap: break-word;\n      line-height: 1.5;\n    }\n    .message.user { \n      background: rgba(168,85,247,0.2); \n      border: 1px solid #a855f7; \n      align-self: flex-end;\n    }\n    .message.assistant { \n      background: rgba(245,158,11,0.1); \n      border: 1px solid #f59e0b; \n      align-self: flex-start;\n      white-space: pre-wrap;\n    }\n    .input-area { \n      padding: 1.5rem; \n      border-top: 1px solid #a855f7; \n      display: flex; \n      gap: 1rem; \n      align-items: center;\n    }\n    input { \n      flex: 1; \n      background: rgba(168,85,247,0.1); \n      border: 1px solid #a855f7; \n      color: #a855f7; \n      padding: 1rem; \n      font-family: monospace; \n      font-size: 1rem; \n      border-radius: 6px;\n    }\n    input:focus { \n      outline: none; \n      border-color: #f59e0b;\n    }\n    button { \n      background: transparent; \n      border: 1px solid #a855f7; \n      color: #a855f7; \n      padding: 1rem; \n      font-size: 1.2rem; \n      cursor: pointer; \n      border-radius: 50%; \n      width: 50px; \n      height: 50px;\n      display: flex;\n      align-items: center;\n      justify-content: center;\n    }\n    button:hover { \n      background: rgba(168,85,247,0.1);\n    }\n    button.recording { \n      background: #ef4444; \n      border-color: #ef4444; \n      color: #0f0f1a;\n      animation: pulse 1s infinite;\n    }\n    @keyframes pulse { \n      0%, 100% { opacity: 1; } \n      50% { opacity: 0.7; }\n    }\n    .error { \n      background: rgba(239,68,68,0.1); \n      border: 1px solid #ef4444; \n      color: #ef4444; \n      padding: 1rem; \n      border-radius: 8px; \n      margin: 1rem;\n    }\n    .hidden { display: none; }\n  </style>\n</head>\n<body>\n  <div id="error" class="error hidden"></div>\n  <div class="chat-container" id="chat"></div>\n  <div class="input-area">\n    <input type="text" id="text-input" placeholder="Type or speak..." />\n    <button id="voice-btn">🎤</button>\n  </div>\n  <script>\n    let ws = null, mediaRec = null, stream = null;\n    const chat = document.getElementById(\'chat\');\n    const errorBox = document.getElementById(\'error\');\n    const voiceBtn = document.getElementById(\'voice-btn\');\n    const textInput = document.getElementById(\'text-input\');\n    const sessionId = \'session-\' + Date.now();\n    let isRecording = false;\n    \n    function showError(msg) {\n      errorBox.textContent = msg;\n      errorBox.classList.remove(\'hidden\');\n      setTimeout(() => errorBox.classList.add(\'hidden\'), 5000);\n    }\n    \n    function addMessage(role, content) {\n      const msg = document.createElement(\'div\');\n      msg.className = \'message \' + role;\n      msg.textContent = content;\n      chat.appendChild(msg);\n      chat.scrollTop = chat.scrollHeight;\n    }\n    \n    async function sendToObi(message) {\n      try {\n        const resp = await fetch(\'/chat\', {\n          method: \'POST\',\n          headers: { \'Content-Type\': \'application/json\' },\n          body: JSON.stringify({ message: message, sessionId: sessionId })\n        });\n        \n        if (!resp.ok) {\n          const errData = await resp.json();\n          throw new Error(errData.message || \'Chat error\');\n        }\n        \n        const data = await resp.json();\n        addMessage(\'assistant\', data.reply);\n      } catch (err) {\n        showError(err.message);\n      }\n    }\n    \n    async function startVoice() {\n      try {\n        const wsUrl = location.protocol.replace(\'http\', \'ws\') + \'//\' + location.host + \'/deepgram-ws\';\n        ws = new WebSocket(wsUrl);\n        \n        ws.onopen = async () => {\n          stream = await navigator.mediaDevices.getUserMedia({ audio: true });\n          const mimeType = MediaRecorder.isTypeSupported(\'audio/webm;codecs=opus\')\n            ? \'audio/webm;codecs=opus\'\n            : \'audio/webm\';\n          \n          mediaRec = new MediaRecorder(stream, { mimeType: mimeType });\n          mediaRec.ondataavailable = async (e) => {\n            if (!e.data || e.data.size === 0 || !ws || ws.readyState !== 1) return;\n            const ab = await e.data.arrayBuffer();\n            ws.send(ab);\n          };\n          \n          mediaRec.start(250);\n          isRecording = true;\n          voiceBtn.textContent = '⏹';\n          voiceBtn.classList.add(\'recording\');\n        };\n        \n        ws.onmessage = async (e) => {\n          try {\n            const data = JSON.parse(e.data);\n            if (data.__debug) return;\n            \n            const transcript = data.channel?.alternatives?.[0]?.transcript;\n            const isFinal = data.is_final || false;\n            \n            if (transcript && isFinal) {\n              addMessage(\'user\', transcript);\n              await sendToObi(transcript);\n            }\n          } catch (err) {}\n        };\n        \n        ws.onerror = () => {\n          showError(\'Voice connection failed\');\n          stopVoice();\n        };\n        \n        ws.onclose = () => stopVoice();\n      } catch (err) {\n        showError(\'Voice error: \' + err.message);\n        stopVoice();\n      }\n    }\n    \n    function stopVoice() {\n      if (ws && ws.readyState === 1) {\n        ws.send(JSON.stringify({ type: \'CloseStream\' }));\n      }\n      if (mediaRec && mediaRec.state !== \'inactive\') mediaRec.stop();\n      if (stream) stream.getTracks().forEach(t => t.stop());\n      if (ws && ws.readyState < 2) ws.close();\n      \n      isRecording = false;\n      voiceBtn.textContent = '🎤';\n      voiceBtn.classList.remove(\'recording\');\n    }\n    \n    voiceBtn.onclick = () => {\n      if (isRecording) stopVoice();\n      else startVoice();\n    };\n    \n    textInput.addEventListener(\'keypress\', async (e) => {\n      if (e.key === \'Enter\') {\n        const msg = textInput.value.trim();\n        if (!msg) return;\n        \n        addMessage(\'user\', msg);\n        textInput.value = \'\';\n        await sendToObi(msg);\n      }\n    });\n    \n    addMessage(\'assistant\', \'Ready. Say "mine the logs" to load 833 chat files.\');\n  </script>\n</body>\n</html>';
 
 export default {
   async fetch(request, env, ctx) {
@@ -722,11 +800,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v116-CLEAN-CHAT',
+        version: 'v117-CHUNKED-STORAGE',
         benchmarks: {
-          'b0+b1': '✅ Voice + text integrated',
-          b2: '✅ STONESKY ledger active',
-          b3: '⏳ Say "mine the logs" to execute', 
+          'b0+b1': '✅ Voice + text',
+          b2: '✅ STONESKY ledger',
+          b3: '⏳ Say "mine the logs"', 
           b4: 'pending',
           b5: 'pending'
         }
@@ -766,6 +844,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v116-CLEAN-CHAT', { status: 404 });
+    return new Response('Phoenix OB1 v117-CHUNKED-STORAGE', { status: 404 });
   }
 };
