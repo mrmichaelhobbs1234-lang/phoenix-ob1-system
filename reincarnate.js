@@ -1253,7 +1253,7 @@ export default {
       });
     }
     
-    if (url.pathname === '/' || url.pathname === '/voice-chat' || url.pathname === '/voice-chat.html') {
+    if (url.pathname === '/' || url.pathname === '/voice-chat' || url.pathname === '/voice-chat.html' || url.pathname === '/magic-chat' || url.pathname === '/magic-chat.html') {
       return new Response(MAGIC_CHAT_HTML, {
         headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' }
       });
