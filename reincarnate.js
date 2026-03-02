@@ -1,7 +1,7 @@
-// reincarnate.js - Phoenix OB1 System v117-CHUNKED-STORAGE
+// reincarnate.js - Phoenix OB1 System v118-SMART-OBI
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification (LIVE)
-// B3: Knowledge base mining - chunked storage fix
+// B3: Knowledge base mining - smart verification layer
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
 
@@ -298,10 +298,12 @@ export class SessionDO {
 
 function needsDeepSeek(message, geminiReply) {
   const triggers = [
+    /what is|define|explain|tell me about/i,
+    /soul|dna|protocol|benchmark/i,
     /code|function|algorithm|debug|error|syntax/i,
     /analyze|architecture|design pattern/i,
-    /drift|benchmark|ledger|merkle/i,
-    /complex|technical|deep dive/i
+    /drift|ledger|merkle/i,
+    /search|find|look for/i
   ];
   
   const isTechnical = triggers.some(regex => regex.test(message));
@@ -309,7 +311,8 @@ function needsDeepSeek(message, geminiReply) {
     /as an ai/i,
     /i'm not sure/i,
     /i don't have enough/i,
-    /i cannot/i
+    /i cannot/i,
+    /from conversation/i
   ].some(regex => regex.test(geminiReply));
   
   return isTechnical || weakResponse;
@@ -324,7 +327,7 @@ async function callGemini(messages, env) {
       body: JSON.stringify({
         contents: messages,
         generationConfig: {
-          temperature: 0.8,
+          temperature: 0.7,
           maxOutputTokens: 1000
         }
       })
@@ -355,7 +358,7 @@ async function callDeepSeek(messages, env) {
     body: JSON.stringify({
       model: 'deepseek-chat',
       messages: deepseekMessages,
-      temperature: 0.7,
+      temperature: 0.6,
       max_tokens: 1500
     })
   });
@@ -549,9 +552,9 @@ async function processChatMessage(message, sessionId, env) {
     try {
       const mineResult = await mineKnowledgeBase(sessionId, env);
       if (mineResult.cached) {
-        specialAction = `Already mined. I have ${mineResult.count} files and ${mineResult.layers} layers ready.`;
+        specialAction = `Already mined. ${mineResult.count} files and ${mineResult.layers} layers loaded.`;
       } else {
-        specialAction = `Mining complete! Loaded ${mineResult.count} files (out of ${mineResult.total} total) and extracted ${mineResult.layers} structured layers. Ask me anything.`;
+        specialAction = `Mining complete! Loaded ${mineResult.count} files (out of ${mineResult.total} total) and extracted ${mineResult.layers} structured layers. You can now ask me anything about past conversations.`;
       }
     } catch (err) {
       specialAction = `Mining failed: ${err.message}`;
@@ -568,48 +571,92 @@ async function processChatMessage(message, sessionId, env) {
     }
   }
   
-  let contextAddition = '';
-  
   const metaResp = await doStub.fetch('https://fake/knowledge/get');
   const meta = await metaResp.json();
   
+  let contextAddition = '';
+  let knowledgeStatus = '';
+  
   if (meta.fileCount && meta.fileCount > 0) {
+    knowledgeStatus = `Knowledge base loaded: ${meta.fileCount} files, ${meta.layerCount} layers.`;
+    
     const queryResult = await queryKnowledgeBase(message, sessionId, env);
     if (queryResult.found) {
-      contextAddition = '\n\n[KNOWLEDGE BASE CONTEXT]\n';
+      contextAddition = '\n\n[VERIFIED KNOWLEDGE BASE CONTEXT]\n';
+      contextAddition += `Searched ${meta.fileCount} files and ${meta.layerCount} layers.\n\n`;
       
       if (queryResult.layers && queryResult.layers.length > 0) {
-        contextAddition += '\nLayers found:\n';
+        contextAddition += 'LAYERS FOUND:\n';
         for (const layer of queryResult.layers.slice(0, 3)) {
           contextAddition += `Layer ${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content}\n\n`;
         }
       }
       
       if (queryResult.results && queryResult.results.length > 0) {
-        contextAddition += '\nFiles matched:\n';
+        contextAddition += 'FILES MATCHED:\n';
         for (const res of queryResult.results.slice(0, 3)) {
           contextAddition += `\nFrom ${res.file}:\n`;
           contextAddition += res.snippets.slice(0, 3).join('\n') + '\n';
         }
       }
+    } else {
+      contextAddition = `\n\n[KNOWLEDGE BASE STATUS: No matches found for "${message}" in ${meta.fileCount} files and ${meta.layerCount} layers.]`;
     }
+  } else {
+    knowledgeStatus = 'Knowledge base NOT mined yet. Say "mine the logs" first.';
+    contextAddition = '\n\n[KNOWLEDGE BASE STATUS: NOT MINED. Cannot answer from past conversations.]';
   }
   
-  const systemPrompt = 'You are Obi, the AI core of the Phoenix Rising Protocol.\n\n## Your Role\nYou execute commands and answer questions for Michael Hobbs through conversational interface.\n\n## Capabilities\n- **Mine knowledge**: When asked to "mine the logs", execute mining (already handled)\n- **Verify ledger**: When asked to "verify ledger", check STONESKY integrity (already handled)\n- **Answer from knowledge**: Search ' + (meta.fileCount || 0) + ' mined files and ' + (meta.layerCount || 0) + ' layers\n- **Voice + Text**: Respond naturally to both\n- **Cite sources**: Always mention specific files and layers\n\n## Personality\n- Conversational, not verbose\n- Technical when needed\n- No theatrical AI personality\n\n## Current Status\n**B3**: ' + (meta.fileCount > 0 ? `${meta.fileCount} files mined, ${meta.layerCount || 0} layers extracted` : 'Not mined yet - say "mine the logs"') + '\n\n## Important\n- Be concise\n- Cite sources: "From [filename], Layer [ID]: ..."\n- Don\'t over-explain';
+  const systemPrompt = `You are Obi, the AI core of the Phoenix Rising Protocol.
+
+## CRITICAL RULES - NO EXCEPTIONS
+1. NEVER cite a file unless it appears in [VERIFIED KNOWLEDGE BASE CONTEXT] or [FILES MATCHED]
+2. NEVER claim mining succeeded unless you see "Mining complete!" in your response
+3. NEVER invent layer numbers, file names, or content
+4. If [KNOWLEDGE BASE STATUS: NOT MINED], say "No knowledge base loaded. Ask me to mine the logs first."
+5. If [No matches found], say "I searched ${meta.fileCount || 0} files but found no mention of that."
+6. ONLY cite sources that appear in the context block above
+7. NO fabrication. NO guessing. FACT-CHECK EVERYTHING.
+
+## Your Role
+You execute commands and answer questions for Michael Hobbs through conversational interface.
+
+## Capabilities
+- **Mine knowledge**: When asked to "mine the logs", execute mining (already handled)
+- **Verify ledger**: When asked to "verify ledger", check STONESKY integrity (already handled)
+- **Answer from knowledge**: ONLY if knowledge base is loaded
+- **Voice + Text**: Respond naturally to both
+- **Cite sources**: ONLY mention files that exist in [FILES MATCHED] or [LAYERS FOUND]
+
+## Personality
+- Conversational, not verbose
+- Technical when needed
+- Admit when you don't know
+- NO theatrical AI personality
+
+## Current Status
+${knowledgeStatus}
+
+## Important
+- Be concise
+- Cite sources: "From [exact filename], Layer [exact ID]: [exact quote]"
+- If no knowledge exists, say so
+- Don't over-explain
+- NEVER make up citations`;
 
   const geminiMessages = [
     { role: 'user', parts: [{ text: systemPrompt }] },
-    { role: 'model', parts: [{ text: 'Ready.' }] }
+    { role: 'model', parts: [{ text: 'Understood. I will only cite verified sources from the knowledge base.' }] }
   ];
   
-  for (const msg of messages) {
+  for (const msg of messages.slice(-10)) {
     geminiMessages.push({ 
       role: msg.role === 'user' ? 'user' : 'model', 
       parts: [{ text: msg.content }] 
     });
   }
   
-  const augmentedMessage = contextAddition ? message + contextAddition : message;
+  const augmentedMessage = message + contextAddition;
   geminiMessages.push({ role: 'user', parts: [{ text: augmentedMessage }] });
   
   let reply = '';
@@ -621,6 +668,7 @@ async function processChatMessage(message, sessionId, env) {
   } else {
     try {
       reply = await callGemini(geminiMessages, env);
+      
       if (env.DEEPSEEK_API_KEY && needsDeepSeek(message, reply)) {
         reply = await callDeepSeek(geminiMessages, env);
         aiUsed = 'deepseek';
@@ -628,13 +676,20 @@ async function processChatMessage(message, sessionId, env) {
     } catch (geminiError) {
       console.error('AI error (redacted):', redactSecrets({ error: geminiError.message }));
       if (env.DEEPSEEK_API_KEY) {
-        reply = await callDeepSeek(geminiMessages, env);
-        aiUsed = 'deepseek-fallback';
-      } else throw geminiError;
+        try {
+          reply = await callDeepSeek(geminiMessages, env);
+          aiUsed = 'deepseek-fallback';
+        } catch (deepseekError) {
+          reply = 'AI error. Both Gemini and DeepSeek failed.';
+          aiUsed = 'error';
+        }
+      } else {
+        throw geminiError;
+      }
     }
   }
   
-  if (!reply) reply = 'Error: No response';
+  if (!reply) reply = 'Error: No response generated';
   
   await doStub.fetch('https://fake/add', { 
     method: 'POST', 
@@ -800,7 +855,7 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v117-CHUNKED-STORAGE',
+        version: 'v118-SMART-OBI',
         benchmarks: {
           'b0+b1': '✅ Voice + text',
           b2: '✅ STONESKY ledger',
@@ -844,6 +899,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v117-CHUNKED-STORAGE', { status: 404 });
+    return new Response('Phoenix OB1 v118-SMART-OBI', { status: 404 });
   }
 };
