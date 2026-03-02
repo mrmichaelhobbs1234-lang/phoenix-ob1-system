@@ -1,0 +1,13 @@
+name = "phoenix-b3-indexer"
+main = "workers/indexer.js"
+compatibility_date = "2024-01-01"
+
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "phoenix-knowledge-base"
+
+[ai]
+binding = "AI"
+
+[vars]
+GITHUB_REPO = "mrmichaelhobbs1234-lang/phoenix-chat-logs"
