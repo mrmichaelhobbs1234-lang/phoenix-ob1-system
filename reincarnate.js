@@ -4,6 +4,7 @@
 // B3: Knowledge base mining - dynamic status
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
+// DEPLOY: 2026-03-02T08:31:00Z
 
 const rateLimits = new Map();
 
