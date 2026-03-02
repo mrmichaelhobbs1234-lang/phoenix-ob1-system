@@ -1,7 +1,7 @@
-// reincarnate.js - Phoenix OB1 System v119-PURE-DYNAMIC
+// reincarnate.js - Phoenix OB1 System v120-CLEAN
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification (LIVE)
-// B3: Knowledge base mining - smart verification layer
+// B3: Knowledge base mining - dynamic status
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
 
@@ -603,7 +603,7 @@ async function processChatMessage(message, sessionId, env) {
       contextAddition = `\n\n[KNOWLEDGE BASE STATUS: No matches found for "${message}" in ${meta.fileCount} files and ${meta.layerCount} layers.]`;
     }
   } else {
-    knowledgeStatus = 'Knowledge base NOT mined yet. Say "mine the logs" first.';
+    knowledgeStatus = 'Knowledge base NOT mined yet.';
     contextAddition = '\n\n[KNOWLEDGE BASE STATUS: NOT MINED. Cannot answer from past conversations.]';
   }
   
@@ -855,13 +855,13 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v119-PURE-DYNAMIC',
+        version: 'v120-CLEAN',
         benchmarks: {
           'b0+b1': '✅ Voice + text',
           b2: '✅ STONESKY ledger',
-          b3: '⏳ Say "mine the logs"', 
-          b4: 'pending',
-          b5: 'pending'
+          b3: '⚠️ Not configured', 
+          b4: '⏳ Pending',
+          b5: '⏳ Pending'
         }
       }), { 
         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
@@ -899,6 +899,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v119-PURE-DYNAMIC', { status: 404 });
+    return new Response('Phoenix OB1 v120-CLEAN', { status: 404 });
   }
 };
