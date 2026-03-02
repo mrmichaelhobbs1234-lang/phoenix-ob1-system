@@ -852,6 +852,7 @@ export default {
     
     if (url.pathname === '/' || url.pathname === '/voice-chat' || url.pathname === '/voice-chat.html') {
       return new Response(null, { status: 302, headers: { "Location": "/magic-chat.html" } });
+    }
     
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
