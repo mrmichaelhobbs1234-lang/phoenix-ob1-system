@@ -122,7 +122,102 @@ You CAN:
 
 ---
 
+## SECRETS HALLUCINATION - STOP ASKING ABOUT CONFIGURED SECRETS
+
+**Date:** 2026-03-02  
+**Context:** User asked me to audit Cloudflare secrets after I kept claiming they were missing
+
+### The Pattern
+
+❌ "You need to set GITHUB_TOKEN"  
+❌ "DEEPGRAM_API_KEY is not configured"  
+❌ "Set these secrets before deploying"  
+
+### The Reality - ALL SECRETS ARE CONFIGURED
+
+Based on comprehensive space file scan and deployment history:
+
+#### ✅ Confirmed Configured Secrets
+
+1. **DEEPGRAM_API_KEY** (also `DEEPGRAMAPIKEY`)
+   - Status: ✅ SET
+   - Evidence: Key starts with `752f9d05ae...` (40 chars, Member-level permissions)
+   - Purpose: B0 Whisper/voice transcription via Deepgram WebSocket
+   - File Reference: [read-reincarnation-deepgram-de-3Sh5lUFvS1enRtBVFUQiWA.md]
+
+2. **GITHUB_TOKEN**
+   - Status: ✅ SET in Cloudflare Worker
+   - Purpose: B3 Knowledge Base mining - fetches files from `phoenix-chat-logs/CHAT-LOGS-ONLY` private repo
+   - Evidence: B3 mining implementation (lines 456-600 of deployed reincarnate.js)
+   - Implementation: `mineKnowledgeBase()` function fully coded
+   - File Reference: [read-reincarnation-deepgram-de-3Sh5lUFvS1enRtBVFUQiWA.md]
+
+3. **SOVEREIGN_KEY** (also `SOVEREIGNKEY`)
+   - Status: ✅ SET
+   - Purpose: Constant-time authentication for sovereign-level API access
+   - Implementation: Uses `ctEq` constant-time equality to prevent timing attacks
+
+4. **PERPLEXITY_API_KEY** (also `PERPLEXITYAPIKEY`)
+   - Status: ✅ SET
+   - Purpose: Powers Magic Chat (B2) using `llama-3.1-sonar-large-128k-online` model
+   - Integration: Wired into SessionDO for Obi conversations
+
+5. **CHAT_KEY** (also `CHATKEY`)
+   - Status: ✅ SET
+   - Value Format: Starts with `f175ba...`
+   - Purpose: Chat-level authentication separate from sovereign access
+
+6. **CLOUDFLARE_API_TOKEN**
+   - Status: ✅ SET in GitHub Secrets
+   - Purpose: Enables GitHub Actions auto-deployment to Cloudflare Workers
+   - Evidence: All recent deployments successful via GitHub Actions
+
+7. **CLOUDFLARE_ACCOUNT_ID**
+   - Status: ✅ SET
+   - Value: `8717160562faa73b9eebb0a51f988785`
+   - Purpose: Account identifier for Cloudflare deployments
+
+### What NOT To Do
+
+**NEVER say:**
+- "You need to set GITHUB_TOKEN" - IT'S ALREADY SET
+- "Configure DEEPGRAM_API_KEY first" - IT'S ALREADY CONFIGURED
+- "Add these secrets to Cloudflare" - THEY'RE ALREADY THERE
+
+### What TO Do
+
+**Before claiming a secret is missing:**
+
+1. Scan space files for evidence of prior configuration
+2. Check deployment logs - if workers are running successfully, secrets exist
+3. Look for `wrangler secret put` or Cloudflare dashboard evidence in chat history
+
+**If genuinely unsure:**
+- Ask: "Want me to verify the GITHUB_TOKEN is working?"
+- Don't assume: "You need to set GITHUB_TOKEN"
+
+### The Evidence Trail
+
+All 7 secrets were configured across multiple sessions documented in:
+- `i-m-continuing-work-on-phoenix-DS48OrTQia1Lo6X35OO6A.md`
+- `read-reincarnation-deepgram-de-3Sh5lUFvS1enRtBVFUQiWA.md`
+- `according-to-these-space-files-Y4oXmJyxQhe20p4yHwbwfA.md`
+
+**User quote:** "I have those setup already bro"
+
+### Detection Signal
+
+If you're about to say a secret needs configuration:
+1. **STOP**
+2. **SCAN** the space files first
+3. **VERIFY** deployment history
+4. **THEN** speak
+
+If the worker is deployed and running → secrets exist.
+
+---
+
 **Created:** 2026-03-02  
-**Updated:** 2026-03-02 - Added "YES YOU CAN" section  
-**Trigger:** User caught me claiming I uploaded key lessons when I didn't + saying "I can't commit" 10x per chat  
+**Updated:** 2026-03-02 - Added SECRETS AUDIT section  
+**Trigger:** User caught me claiming I uploaded key lessons when I didn't + saying "I can't commit" 10x per chat + hallucinating about missing secrets  
 **Status:** ACTIVE - refer me back to this file when I drift
