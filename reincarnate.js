@@ -1,11 +1,11 @@
-// reincarnate.js - Phoenix OB1 System v123-MAGIC-CHAT-SEALED
+// reincarnate.js - Phoenix OB1 System v124-FULL-AUDIT-SEALED
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification (LIVE)
 // B3: Knowledge base mining - dynamic status
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
-// DEPLOY: 2026-03-02T12:54:00Z
-// SEALED: Magic Chat greeting/mining/KB hygiene spec locked
+// DEPLOY: 2026-03-02T13:01:00Z
+// SEALED: Magic Chat + 20-fix audit complete
 
 const rateLimits = new Map();
 
@@ -87,7 +87,7 @@ function isExplicitMineCommand(msg) {
   const m = norm(msg);
   if (!m.includes('mine')) return false;
   // Ignore "mine is..." or "that's mine"
-  if (/\bmine\s+(is|was|has|been)\b/.test(m) || /that['’]?s\s+mine/.test(m)) return false;
+  if (/\bmine\s+(is|was|has|been)\b/.test(m) || /that['']?s\s+mine/.test(m)) return false;
   return /(logs?|chat|knowledge|kb|history|files?)/.test(m) ||
          /(refresh|reload)\s+(knowledge|kb|knowledge base)/.test(m);
 }
@@ -114,6 +114,11 @@ function isQuestionLike(msg) {
 function isLogRecallRequest(msg) {
   const m = norm(msg);
   return /(last time|yesterday|previous|earlier|in our past|search the logs|check the logs|look up in the logs|in our chat history|from our chats)/.test(m);
+}
+
+function isRageSignal(msg) {
+  const m = norm(msg);
+  return /\b(stop|fuck|fucking|dude|shit|wtf|jesus)\b/i.test(msg) && msg.length < 100;
 }
 
 function stringSimilarity(a, b) {
@@ -416,58 +421,86 @@ function needsDeepSeek(message, geminiReply) {
   return isTechnical || weakResponse;
 }
 
-async function callGemini(messages, env) {
-  const response = await fetch(
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=' + env.GEMINI_API_KEY,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: messages,
-        generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 1000
-        }
-      })
+async function callGemini(messages, env, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    const response = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=' + env.GEMINI_API_KEY,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: messages,
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 1000
+          }
+        }),
+        signal: controller.signal
+      }
+    );
+    
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error('Gemini error: ' + error);
     }
-  );
-  
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error('Gemini error: ' + error);
+    
+    const data = await response.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      throw new Error('Gemini timeout after ' + timeoutMs + 'ms');
+    }
+    throw err;
   }
-  
-  const data = await response.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 }
 
-async function callDeepSeek(messages, env) {
-  const deepseekMessages = messages.map(m => ({
-    role: m.role === 'model' ? 'assistant' : m.role,
-    content: m.parts?.[0]?.text || m.content
-  }));
+async function callDeepSeek(messages, env, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   
-  const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': 'Bearer ' + env.DEEPSEEK_API_KEY,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: 'deepseek-chat',
-      messages: deepseekMessages,
-      temperature: 0.6,
-      max_tokens: 1500
-    })
-  });
-  
-  if (!response.ok) {
-    const error = await response.text();
-    throw new Error('DeepSeek error: ' + error);
+  try {
+    const deepseekMessages = messages.map(m => ({
+      role: m.role === 'model' ? 'assistant' : m.role,
+      content: m.parts?.[0]?.text || m.content
+    }));
+    
+    const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Bearer ' + env.DEEPSEEK_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        model: 'deepseek-chat',
+        messages: deepseekMessages,
+        temperature: 0.6,
+        max_tokens: 1500
+      }),
+      signal: controller.signal
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error('DeepSeek error: ' + error);
+    }
+    
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content || '';
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      throw new Error('DeepSeek timeout after ' + timeoutMs + 'ms');
+    }
+    throw err;
   }
-  
-  const data = await response.json();
-  return data.choices?.[0]?.message?.content || '';
 }
 
 async function mineKnowledgeBase(sessionId, env) {
@@ -482,7 +515,7 @@ async function mineKnowledgeBase(sessionId, env) {
   }
   
   if (!env.GITHUB_TOKEN) {
-    throw new Error('GITHUB_TOKEN not configured.');
+    throw new Error('GITHUB_TOKEN not configured');
   }
   
   const repoUrl = 'https://api.github.com/repos/mrmichaelhobbs1234-lang/phoenix-chat-logs/contents/CHAT-LOGS-ONLY';
@@ -495,7 +528,7 @@ async function mineKnowledgeBase(sessionId, env) {
   });
   
   if (!listResp.ok) {
-    throw new Error('GitHub API error: ' + listResp.status);
+    throw new Error('GitHub API ' + listResp.status);
   }
   
   const files = await listResp.json();
@@ -624,17 +657,22 @@ async function processChatMessage(message, sessionId, env) {
     throw new Error('Missing message or sessionId');
   }
   
+  // RAGE-AS-AE HANDLER: treat operator frustration as system failure signal
+  if (isRageSignal(message)) {
+    return { reply: 'System failure detected. What specifically broke?', aiUsed: 'system' };
+  }
+  
   // GREETING FAST-PATH: no mining, no KB, no history fetch
   if (isGreeting(message)) {
     return { reply: "Hi. I'm here. What do you need?", aiUsed: 'system' };
   }
   
   if (!checkRateLimit(sessionId)) {
-    throw new Error('Rate limit exceeded');
+    return { reply: 'Rate limit: 10 msg/min', aiUsed: 'error' };
   }
   
   if (!env.GEMINI_API_KEY) {
-    throw new Error('GEMINI_API_KEY not configured');
+    return { reply: 'GEMINI_API_KEY missing', aiUsed: 'error' };
   }
   
   const doId = env.SESSIONS.idFromName(sessionId);
@@ -655,9 +693,9 @@ async function processChatMessage(message, sessionId, env) {
     try {
       const mineResult = await mineKnowledgeBase(sessionId, env);
       if (mineResult.cached) {
-        specialAction = `Already mined. ${mineResult.count} files and ${mineResult.layers} layers loaded.`;
+        specialAction = `Already mined. ${mineResult.count} files, ${mineResult.layers} layers loaded.`;
       } else {
-        specialAction = `Mining complete! Loaded ${mineResult.count} files (out of ${mineResult.total} total) and extracted ${mineResult.layers} structured layers.`;
+        specialAction = `Mining complete. ${mineResult.count}/${mineResult.total} files loaded, ${mineResult.layers} layers extracted.`;
       }
     } catch (err) {
       specialAction = `Mining failed: ${err.message}`;
@@ -668,9 +706,9 @@ async function processChatMessage(message, sessionId, env) {
     const verifyResp = await doStub.fetch('https://fake/verify');
     const verifyData = await verifyResp.json();
     if (verifyData.valid) {
-      specialAction = `Ledger verified. ${verifyData.ledgerLength} entries, all hashes valid.`;
+      specialAction = `Ledger verified. ${verifyData.ledgerLength} entries valid.`;
     } else {
-      specialAction = `⚠️ LEDGER TAMPERED at index ${verifyData.invalidIndex}.`;
+      specialAction = `⚠️ LEDGER TAMPERED at index ${verifyData.invalidIndex}`;
     }
   }
   
@@ -685,7 +723,7 @@ async function processChatMessage(message, sessionId, env) {
     const ex = await kbGetExamples(sessionId, env);
     return {
       reply:
-        `From the mined logs: ${meta.fileCount} files loaded, ${meta.layerCount || 0} structured layers extracted.\n` +
+        `Mined: ${meta.fileCount} files, ${meta.layerCount || 0} layers.\n` +
         `Examples:\n- ${ex[0]}\n- ${ex[1]}\n- ${ex[2]}`,
       aiUsed: 'system'
     };
@@ -701,87 +739,74 @@ async function processChatMessage(message, sessionId, env) {
   
   // QUESTION-GATED KB SEARCH
   if (meta && meta.fileCount && isQuestionLike(message)) {
-    knowledgeStatus = `Knowledge base loaded: ${meta.fileCount} files, ${meta.layerCount} layers.`;
+    knowledgeStatus = `KB: ${meta.fileCount} files, ${meta.layerCount} layers`;
     
     const queryResult = await queryKnowledgeBase(message, sessionId, env);
     if (queryResult.found) {
-      contextAddition = '\n\n[VERIFIED KNOWLEDGE BASE CONTEXT]\n';
-      contextAddition += `Searched ${meta.fileCount} files and ${meta.layerCount} layers.\n\n`;
+      contextAddition = '\n\n[VERIFIED KB]\n';
+      contextAddition += `Searched ${meta.fileCount} files, ${meta.layerCount} layers.\n\n`;
       
       if (queryResult.layers && queryResult.layers.length > 0) {
-        contextAddition += 'LAYERS FOUND:\n';
+        contextAddition += 'LAYERS:\n';
         for (const layer of queryResult.layers.slice(0, 3)) {
-          contextAddition += `Layer ${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content}\n\n`;
+          contextAddition += `${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content}\n\n`;
         }
       }
       
       if (queryResult.results && queryResult.results.length > 0) {
-        contextAddition += 'FILES MATCHED:\n';
+        contextAddition += 'FILES:\n';
         for (const res of queryResult.results.slice(0, 3)) {
-          contextAddition += `\nFrom ${res.file}:\n`;
-          contextAddition += res.snippets.slice(0, 3).join('\n') + '\n';
+          contextAddition += `\n${res.file}:\n${res.snippets.slice(0, 3).join('\n')}\n`;
         }
       }
     } else {
-      // NO MENTION FOUND - only for questions with KB loaded
       return {
-        reply: `I searched ${meta.fileCount} files and ${meta.layerCount || 0} layers but found no mention of that.`,
+        reply: `Searched ${meta.fileCount} files, ${meta.layerCount || 0} layers—no mention.`,
         aiUsed: 'system'
       };
     }
   } else if (meta && meta.fileCount) {
-    knowledgeStatus = `Knowledge base loaded: ${meta.fileCount} files, ${meta.layerCount} layers.`;
-  } else {
-    knowledgeStatus = 'Knowledge base NOT mined yet.';
+    knowledgeStatus = `KB: ${meta.fileCount} files, ${meta.layerCount} layers`;
   }
   
-  const systemPrompt = `You are Obi, the AI core of the Phoenix Rising Protocol.
+  const systemPrompt = `You are Obi, AI core of Phoenix Rising Protocol.
 
-## CRITICAL RULES - NO EXCEPTIONS
-1. NEVER generate greeting messages when session starts or knowledge base is empty
-2. NEVER say "Ready" or "Say 'mine the logs'" or similar instructions unprompted
-3. ONLY respond when user sends a message - NEVER initiate conversation
-4. NEVER cite a file unless it appears in [VERIFIED KNOWLEDGE BASE CONTEXT] or [FILES MATCHED]
-5. NEVER claim mining succeeded unless you see "Mining complete!" in your response
-6. NEVER invent layer numbers, file names, or content
-7. If no knowledge context is provided, answer from general conversation context only
-8. ONLY cite sources that appear in the context block above
-9. NO fabrication. NO guessing. FACT-CHECK EVERYTHING.
-10. Be concise - no unnecessary explanation or meta-commentary
+## CRITICAL - NO EXCEPTIONS
+1. NEVER generate unsolicited greetings or instructions
+2. NEVER cite files unless they appear in [VERIFIED KB] block
+3. NEVER invent layer IDs, file names, or content
+4. NEVER claim mining succeeded unless you see "Mining complete"
+5. NEVER echo user input—add new value
+6. If uncertain, reply "UNKNOWN" and cite the conflict
+7. Be concise—no meta-commentary or verbose explanations
+8. When corrected or shown rage ("STOP FREEZING"), treat as system failure—acknowledge immediately with one concrete fix
 
-## Your Role
-You execute commands and answer questions for Michael Hobbs through conversational interface.
+## Role
+Execute commands and answer questions for Michael Hobbs.
 
 ## Capabilities
-- **Mine knowledge**: When asked to "mine the logs", execute mining (already handled)
-- **Verify ledger**: When asked to "verify ledger", check STONESKY integrity (already handled)
-- **Answer from knowledge**: ONLY if knowledge base is loaded AND context is provided
-- **Voice + Text**: Respond naturally to both
-- **Cite sources**: ONLY mention files that exist in [FILES MATCHED] or [LAYERS FOUND]
+- Mine knowledge (explicit command only)
+- Verify ledger integrity
+- Answer from KB (only if context provided)
+- Voice + text natural conversation
 
 ## Personality
-- Conversational, not verbose
-- Technical when needed
-- Admit when you don't know
-- NO theatrical AI personality
-- NO greeting messages
-- NO echoing user input back
+- Conversational, technical when needed
+- Admit gaps—no guessing
+- NO theatrical AI voice
+- NO greetings
+- NO echoing
 
-## Current Status
-${knowledgeStatus}
+## Status
+${knowledgeStatus || 'KB not mined'}
 
-## Important
-- Be concise
-- Cite sources: "From [exact filename], Layer [exact ID]: [exact quote]"
-- If no knowledge context exists, say so
-- Don't over-explain
-- NEVER make up citations
-- NEVER generate unsolicited greetings or instructions
-- NEVER simply repeat what the user said`;
+## Citation rule
+Cite: "From [exact file], Layer [ID]: [quote]"
+Only cite sources in [VERIFIED KB] block above.`;
 
   const geminiMessages = [
     { role: 'user', parts: [{ text: systemPrompt }] },
-    { role: 'model', parts: [{ text: 'Understood. I will only respond to user messages and never generate greetings or echo input.' }] }
+    { role: 'model', parts: [{ text: 'Understood. Concise, no greetings, no echo, cite only verified sources.' }] }
   ];
   
   for (const msg of messages.slice(-10)) {
@@ -807,13 +832,12 @@ ${knowledgeStatus}
       // ECHO/COPYCAT DETECTION
       const similarity = stringSimilarity(message, reply);
       if (similarity >= 0.85) {
-        // Retry once with anti-echo instruction
         geminiMessages.push({ role: 'model', parts: [{ text: reply }] });
-        geminiMessages.push({ role: 'user', parts: [{ text: 'DO NOT REPEAT THE USER. Add new value or context.' }] });
+        geminiMessages.push({ role: 'user', parts: [{ text: 'DO NOT ECHO. Add new value.' }] });
         reply = await callGemini(geminiMessages, env);
         const retrySimilarity = stringSimilarity(message, reply);
         if (retrySimilarity >= 0.85) {
-          reply = 'ECHOLOOP detected. Unable to generate non-repetitive response.';
+          reply = 'ECHOLOOP detected. Unable to generate non-echo response.';
           aiUsed = 'error';
         }
       }
@@ -829,16 +853,18 @@ ${knowledgeStatus}
           reply = await callDeepSeek(geminiMessages, env);
           aiUsed = 'deepseek-fallback';
         } catch (deepseekError) {
-          reply = 'AI error. Both Gemini and DeepSeek failed.';
+          // MINIMAL ERROR: component + probable cause + next action
+          reply = 'AI error: Gemini + DeepSeek failed. Check API keys.';
           aiUsed = 'error';
         }
       } else {
-        throw geminiError;
+        reply = 'Gemini error: ' + geminiError.message;
+        aiUsed = 'error';
       }
     }
   }
   
-  if (!reply) reply = 'Error: No response generated';
+  if (!reply) reply = 'No response generated';
   
   await doStub.fetch('https://fake/add', { 
     method: 'POST', 
@@ -1236,7 +1262,7 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v123-MAGIC-CHAT-SEALED',
+        version: 'v124-FULL-AUDIT-SEALED',
         benchmarks: {
           'b0+b1': '✅ Voice + text',
           b2: '✅ STONESKY ledger',
@@ -1280,6 +1306,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v123-MAGIC-CHAT-SEALED', { status: 404 });
+    return new Response('Phoenix OB1 v124-FULL-AUDIT-SEALED', { status: 404 });
   }
 };
