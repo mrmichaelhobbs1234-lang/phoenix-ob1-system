@@ -10,5 +10,3 @@ class_name = "SessionDO"
 [[migrations]]
 tag = "v1-genesis"
 new_sqlite_classes = ["SessionDO"]
-[assets]
-directory = "."
