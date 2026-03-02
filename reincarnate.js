@@ -777,7 +777,10 @@ async function processChatMessage(message, sessionId, env) {
 3. NEVER invent layer IDs, file names, or content
 4. NEVER claim mining succeeded unless you see "Mining complete"
 5. NEVER echo user input—add new value
-6. If uncertain, reply "UNKNOWN" and cite the conflict
+6. UNKNOWN is ONLY allowed for log-recall or verification claims:
+   - If the user asks about past logs / prior decisions / "what did we decide" AND [VERIFIED KB] is absent or conflicting → reply "UNKNOWN" (no citations).
+   - For normal conversation or general technical questions → answer from reasoning and the current chat; DO NOT reply "UNKNOWN" just because KB is missing.
+   - If [VERIFIED KB] is present but conflicting → reply "UNKNOWN" and cite the conflicting sources from VERIFIED KB only.
 7. Be concise—no meta-commentary or verbose explanations
 8. When corrected or shown rage ("STOP FREEZING"), treat as system failure—acknowledge immediately with one concrete fix
 
