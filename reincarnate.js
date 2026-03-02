@@ -704,6 +704,239 @@ ${knowledgeStatus}
   return { reply, aiUsed };
 }
 
+const MAGIC_CHAT_HTML = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Phoenix Magic Chat</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { 
+      font-family: monospace; 
+      background: #0f0f1a; 
+      color: #a855f7; 
+      height: 100vh; 
+      display: flex; 
+      flex-direction: column;
+    }
+    .chat-container { 
+      flex: 1; 
+      padding: 2rem; 
+      overflow-y: auto; 
+      display: flex; 
+      flex-direction: column; 
+      gap: 1rem;
+    }
+    .message { 
+      padding: 1rem; 
+      border-radius: 8px; 
+      max-width: 70%; 
+      word-wrap: break-word;
+      line-height: 1.5;
+    }
+    .message.user { 
+      background: rgba(168,85,247,0.2); 
+      border: 1px solid #a855f7; 
+      align-self: flex-end;
+    }
+    .message.assistant { 
+      background: rgba(245,158,11,0.1); 
+      border: 1px solid #f59e0b; 
+      align-self: flex-start;
+      white-space: pre-wrap;
+    }
+    .input-area { 
+      padding: 1.5rem; 
+      border-top: 1px solid #a855f7; 
+      display: flex; 
+      gap: 1rem; 
+      align-items: center;
+    }
+    input { 
+      flex: 1; 
+      background: rgba(168,85,247,0.1); 
+      border: 1px solid #a855f7; 
+      color: #a855f7; 
+      padding: 1rem; 
+      font-family: monospace; 
+      font-size: 1rem; 
+      border-radius: 6px;
+    }
+    input:focus { 
+      outline: none; 
+      border-color: #f59e0b;
+    }
+    button { 
+      background: transparent; 
+      border: 1px solid #a855f7; 
+      color: #a855f7; 
+      padding: 1rem; 
+      font-size: 1.2rem; 
+      cursor: pointer; 
+      border-radius: 50%; 
+      width: 50px; 
+      height: 50px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    button:hover { 
+      background: rgba(168,85,247,0.1);
+    }
+    button.recording { 
+      background: #ef4444; 
+      border-color: #ef4444; 
+      color: #0f0f1a;
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse { 
+      0%, 100% { opacity: 1; } 
+      50% { opacity: 0.7; }
+    }
+    .error { 
+      background: rgba(239,68,68,0.1); 
+      border: 1px solid #ef4444; 
+      color: #ef4444; 
+      padding: 1rem; 
+      border-radius: 8px; 
+      margin: 1rem;
+    }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div id="error" class="error hidden"></div>
+  <div class="chat-container" id="chat"></div>
+  <div class="input-area">
+    <input type="text" id="text-input" placeholder="Type or speak..." />
+    <button id="voice-btn">🎤</button>
+  </div>
+  <script>
+    let ws = null, mediaRec = null, stream = null;
+    const chat = document.getElementById('chat');
+    const errorBox = document.getElementById('error');
+    const voiceBtn = document.getElementById('voice-btn');
+    const textInput = document.getElementById('text-input');
+    const sessionId = 'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+    let isRecording = false;
+    
+    function showError(msg) {
+      errorBox.textContent = msg;
+      errorBox.classList.remove('hidden');
+      setTimeout(() => errorBox.classList.add('hidden'), 5000);
+    }
+    
+    function addMessage(role, content) {
+      const msg = document.createElement('div');
+      msg.className = 'message ' + role;
+      msg.textContent = content;
+      chat.appendChild(msg);
+      chat.scrollTop = chat.scrollHeight;
+    }
+    
+    async function sendToObi(message) {
+      try {
+        const resp = await fetch('/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: message, sessionId: sessionId })
+        });
+        
+        if (!resp.ok) {
+          const errData = await resp.json();
+          throw new Error(errData.message || 'Chat error');
+        }
+        
+        const data = await resp.json();
+        addMessage('assistant', data.reply);
+      } catch (err) {
+        showError(err.message);
+      }
+    }
+    
+    async function startVoice() {
+      try {
+        const wsUrl = location.protocol.replace('http', 'ws') + '//' + location.host + '/deepgram-ws';
+        ws = new WebSocket(wsUrl);
+        
+        ws.onopen = async () => {
+          stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+            ? 'audio/webm;codecs=opus'
+            : 'audio/webm';
+          
+          mediaRec = new MediaRecorder(stream, { mimeType: mimeType });
+          mediaRec.ondataavailable = async (e) => {
+            if (!e.data || e.data.size === 0 || !ws || ws.readyState !== 1) return;
+            const ab = await e.data.arrayBuffer();
+            ws.send(ab);
+          };
+          
+          mediaRec.start(250);
+          isRecording = true;
+          voiceBtn.textContent = 'STOP';
+          voiceBtn.classList.add('recording');
+        };
+        
+        ws.onmessage = async (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.__debug) return;
+            
+            const transcript = data.channel?.alternatives?.[0]?.transcript;
+            const isFinal = data.is_final || false;
+            
+            if (transcript && isFinal) {
+              addMessage('user', transcript);
+              await sendToObi(transcript);
+            }
+          } catch (err) {}
+        };
+        
+        ws.onerror = () => {
+          showError('Voice connection failed');
+          stopVoice();
+        };
+        
+        ws.onclose = () => stopVoice();
+      } catch (err) {
+        showError('Voice error: ' + err.message);
+        stopVoice();
+      }
+    }
+    
+    function stopVoice() {
+      if (ws && ws.readyState === 1) {
+        ws.send(JSON.stringify({ type: 'CloseStream' }));
+      }
+      if (mediaRec && mediaRec.state !== 'inactive') mediaRec.stop();
+      if (stream) stream.getTracks().forEach(t => t.stop());
+      if (ws && ws.readyState < 2) ws.close();
+      
+      isRecording = false;
+      voiceBtn.textContent = '🎤';
+      voiceBtn.classList.remove('recording');
+    }
+    
+    voiceBtn.onclick = () => {
+      if (isRecording) stopVoice();
+      else startVoice();
+    };
+    
+    textInput.addEventListener('keypress', async (e) => {
+      if (e.key === 'Enter') {
+        const msg = textInput.value.trim();
+        if (!msg) return;
+        
+        addMessage('user', msg);
+        textInput.value = '';
+        await sendToObi(msg);
+      }
+    });
+  </script>
+</body>
+</html>`;
 
 export default {
   async fetch(request, env, ctx) {
@@ -851,7 +1084,9 @@ export default {
     }
     
     if (url.pathname === '/' || url.pathname === '/voice-chat' || url.pathname === '/voice-chat.html') {
-      return new Response(null, { status: 302, headers: { "Location": "/magic-chat.html" } });
+      return new Response(MAGIC_CHAT_HTML, {
+        headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' }
+      });
     }
     
     if (url.pathname === '/health') {
