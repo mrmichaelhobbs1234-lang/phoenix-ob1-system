@@ -1,11 +1,11 @@
-// reincarnate.js - Phoenix OB1 System v126-B3-CONTEXT-MEMORY
+// reincarnate.js - Phoenix OB1 System v127-B3-DYNAMIC-INTENT
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification (LIVE)
-// B3: Knowledge base mining with session context memory (FIXED)
+// B3: Knowledge base mining with dynamic intent detection (FIXED)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
-// DEPLOY: 2026-03-04T09:27:00Z
-// SEALED: Gemini model fixed to gemini-1.5-flash
+// DEPLOY: 2026-03-04T09:31:00Z
+// SEALED: Gemini classifies follow-up intent instead of keyword matching
 
 const rateLimits = new Map();
 
@@ -106,18 +106,6 @@ function isMiningMetaSummaryRequest(msg) {
   );
 }
 
-function isFollowUpAnalysisRequest(msg) {
-  const m = norm(msg);
-  return (
-    /\b(make sense|explain|analyze|what does (this|that|it) mean|interpret)\b/i.test(msg) ||
-    /\b(what'?s|whats) (this|that|it) (about|mean|saying)\b/i.test(msg) ||
-    /\b(alright|ok|okay) let'?s analyze/i.test(msg) ||
-    m === 'make sense of it' ||
-    m === 'explain this' ||
-    m === 'what does this mean'
-  );
-}
-
 function isQuestionLike(msg) {
   const m = (msg || '').trim();
   if (!m) return false;
@@ -209,6 +197,29 @@ async function getSessionContext(sessionId, env) {
     return await resp.json();
   } catch {
     return null;
+  }
+}
+
+async function detectFollowUpIntent(message, context, env) {
+  if (!context || !context.layers || context.layers.length === 0) return false;
+  
+  const prompt = `User message: "${message}"
+
+Recent context: I just showed the user ${context.layers.length} data layers from a knowledge base mining operation.
+
+Question: Is the user asking me to analyze, explain, or make sense of those layers I just showed?
+
+Reply ONLY with YES or NO.`;
+
+  try {
+    const resp = await callGemini([
+      { role: 'user', parts: [{ text: prompt }] }
+    ], env, 3000);
+    
+    const answer = resp.trim().toUpperCase();
+    return answer === 'YES' || answer.startsWith('YES');
+  } catch {
+    return false;
   }
 }
 
@@ -811,18 +822,19 @@ async function processChatMessage(message, sessionId, env) {
     return { reply: reply, aiUsed: 'system' };
   }
   
-  // FOLLOW-UP ANALYSIS: use stored context instead of KB search
-  if (isFollowUpAnalysisRequest(message)) {
-    const context = await getSessionContext(sessionId, env);
-    if (context && context.type === 'layer_sample' && context.layers && context.layers.length > 0) {
-      let contextAddition = '\n\n[VERIFIED KB - RECENTLY SHOWN LAYERS]\n';
-      contextAddition += `These are the exact layers I just showed you:\n\n`;
-      
-      for (const layer of context.layers) {
-        contextAddition += `${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content}\n\n`;
-      }
-      
-      const systemPrompt = `You are Obi, AI core of Phoenix Rising Protocol.
+  // DYNAMIC FOLLOW-UP DETECTION: let Gemini decide if this is analysis request
+  const context = await getSessionContext(sessionId, env);
+  const isFollowUpAnalysis = await detectFollowUpIntent(message, context, env);
+  
+  if (isFollowUpAnalysis && context && context.type === 'layer_sample' && context.layers && context.layers.length > 0) {
+    let contextAddition = '\n\n[VERIFIED KB - RECENTLY SHOWN LAYERS]\n';
+    contextAddition += `These are the exact layers I just showed you:\n\n`;
+    
+    for (const layer of context.layers) {
+      contextAddition += `${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content}\n\n`;
+    }
+    
+    const systemPrompt = `You are Obi, AI core of Phoenix Rising Protocol.
 
 ## CRITICAL - NO EXCEPTIONS
 1. NEVER cite files UNLESS they appear in [VERIFIED KB] block below
@@ -838,45 +850,42 @@ Analyze the layers in [VERIFIED KB] block. What patterns, decisions, or themes a
 ## Status
 KB: ${meta.fileCount} files, ${meta.layerCount} layers total`;
 
-      const geminiMessages = [
-        { role: 'user', parts: [{ text: systemPrompt }] },
-        { role: 'model', parts: [{ text: 'Understood. I will analyze ONLY the layers in [VERIFIED KB] and cite them exactly.' }] }
-      ];
-      
-      for (const msg of messages.slice(-10)) {
-        geminiMessages.push({ 
-          role: msg.role === 'user' ? 'user' : 'model', 
-          parts: [{ text: msg.content }] 
-        });
-      }
-      
-      const augmentedMessage = message + contextAddition;
-      geminiMessages.push({ role: 'user', parts: [{ text: augmentedMessage }] });
-      
-      let reply = '';
-      let aiUsed = 'gemini';
-      
-      try {
-        reply = await callGemini(geminiMessages, env);
-        
-        if (env.DEEPSEEK_API_KEY && needsDeepSeek(message, reply)) {
-          reply = await callDeepSeek(geminiMessages, env);
-          aiUsed = 'deepseek';
-        }
-      } catch (err) {
-        reply = 'AI error: ' + err.message;
-        aiUsed = 'error';
-      }
-      
-      await doStub.fetch('https://fake/add', { 
-        method: 'POST', 
-        body: JSON.stringify({ role: 'assistant', content: reply, userId }) 
+    const geminiMessages = [
+      { role: 'user', parts: [{ text: systemPrompt }] },
+      { role: 'model', parts: [{ text: 'Understood. I will analyze ONLY the layers in [VERIFIED KB] and cite them exactly.' }] }
+    ];
+    
+    for (const msg of messages.slice(-10)) {
+      geminiMessages.push({ 
+        role: msg.role === 'user' ? 'user' : 'model', 
+        parts: [{ text: msg.content }] 
       });
-      
-      return { reply, aiUsed };
-    } else {
-      return { reply: 'No recent layer data to analyze. Ask me to show you mining results first.', aiUsed: 'system' };
     }
+    
+    const augmentedMessage = message + contextAddition;
+    geminiMessages.push({ role: 'user', parts: [{ text: augmentedMessage }] });
+    
+    let reply = '';
+    let aiUsed = 'gemini';
+    
+    try {
+      reply = await callGemini(geminiMessages, env);
+      
+      if (env.DEEPSEEK_API_KEY && needsDeepSeek(message, reply)) {
+        reply = await callDeepSeek(geminiMessages, env);
+        aiUsed = 'deepseek';
+      }
+    } catch (err) {
+      reply = 'AI error: ' + err.message;
+      aiUsed = 'error';
+    }
+    
+    await doStub.fetch('https://fake/add', { 
+      method: 'POST', 
+      body: JSON.stringify({ role: 'assistant', content: reply, userId }) 
+    });
+    
+    return { reply, aiUsed };
   }
   
   // KB-MISSING GUARD ONLY FOR EXPLICIT RECALL
@@ -1415,11 +1424,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v126-B3-CONTEXT-MEMORY',
+        version: 'v127-B3-DYNAMIC-INTENT',
         benchmarks: {
           'b0+b1': '✅ Voice + text',
           b2: '✅ STONESKY ledger',
-          b3: '✅ KB mining + context memory', 
+          b3: '✅ KB mining + dynamic intent', 
           b4: '⏳ Pending',
           b5: '⏳ Pending'
         }
@@ -1459,6 +1468,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v126-B3-CONTEXT-MEMORY', { status: 404 });
+    return new Response('Phoenix OB1 v127-B3-DYNAMIC-INTENT', { status: 404 });
   }
 };
