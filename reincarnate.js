@@ -1,11 +1,11 @@
-// reincarnate.js - Phoenix OB1 System v125-B3-MINING-FIX
+// reincarnate.js - Phoenix OB1 System v126-B3-CONTEXT-MEMORY
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification (LIVE)
-// B3: Knowledge base mining with layer preview (FIXED)
+// B3: Knowledge base mining with session context memory (FIXED)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
-// DEPLOY: 2026-03-04T09:10:00Z
-// SEALED: B3 mining meta-summary now shows actual layers
+// DEPLOY: 2026-03-04T09:20:00Z
+// SEALED: B3 now remembers last-shown layers for follow-up questions
 
 const rateLimits = new Map();
 
@@ -106,11 +106,22 @@ function isMiningMetaSummaryRequest(msg) {
   );
 }
 
+function isFollowUpAnalysisRequest(msg) {
+  const m = norm(msg);
+  return (
+    /\b(make sense|explain|analyze|what does (this|that|it) mean|interpret)\b/i.test(msg) ||
+    /\b(what'?s|whats) (this|that|it) (about|mean|saying)\b/i.test(msg) ||
+    m === 'make sense of it' ||
+    m === 'explain this' ||
+    m === 'what does this mean'
+  );
+}
+
 function isQuestionLike(msg) {
   const m = (msg || '').trim();
   if (!m) return false;
   if (m.endsWith('?')) return true;
-  if (/\b(tell me|show me|explain|describe)\b/i.test(m)) return true;
+  if (/\b(tell me|show me|describe)\b/i.test(m)) return true;
   return /\b(what|why|how|when|where|who|which)\b/i.test(m);
 }
 
@@ -172,6 +183,31 @@ async function kbGetSampleLayers(sessionId, env, count = 5) {
     return shuffled.slice(0, count);
   } catch {
     return [];
+  }
+}
+
+async function setSessionContext(sessionId, env, contextData) {
+  try {
+    const doId = env.SESSIONS.idFromName(sessionId);
+    const doStub = env.SESSIONS.get(doId);
+    await doStub.fetch('https://fake/context/set', {
+      method: 'POST',
+      body: JSON.stringify(contextData)
+    });
+  } catch (err) {
+    console.error('Failed to set context:', err);
+  }
+}
+
+async function getSessionContext(sessionId, env) {
+  try {
+    const doId = env.SESSIONS.idFromName(sessionId);
+    const doStub = env.SESSIONS.get(doId);
+    const resp = await doStub.fetch('https://fake/context/get');
+    if (!resp.ok) return null;
+    return await resp.json();
+  } catch {
+    return null;
   }
 }
 
@@ -239,6 +275,21 @@ export class SessionDO {
     if (url.pathname === '/history') {
       const history = await this.state.storage.get('messages') || [];
       return new Response(JSON.stringify({ messages: history }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (url.pathname === '/context/get') {
+      const context = await this.state.storage.get('session_context') || null;
+      return new Response(JSON.stringify(context), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (url.pathname === '/context/set' && request.method === 'POST') {
+      const contextData = await request.json();
+      await this.state.storage.put('session_context', contextData);
+      return new Response(JSON.stringify({ ok: true }), {
         headers: { 'Content-Type': 'application/json' }
       });
     }
@@ -749,7 +800,82 @@ async function processChatMessage(message, sessionId, env) {
       }
     }
     
+    // STORE LAYERS IN SESSION CONTEXT FOR FOLLOW-UP
+    await setSessionContext(sessionId, env, {
+      type: 'layer_sample',
+      layers: sampleLayers,
+      timestamp: new Date().toISOString()
+    });
+    
     return { reply: reply, aiUsed: 'system' };
+  }
+  
+  // FOLLOW-UP ANALYSIS: use stored context instead of KB search
+  if (isFollowUpAnalysisRequest(message)) {
+    const context = await getSessionContext(sessionId, env);
+    if (context && context.type === 'layer_sample' && context.layers && context.layers.length > 0) {
+      let contextAddition = '\n\n[VERIFIED KB - RECENTLY SHOWN LAYERS]\n';
+      contextAddition += `These are the exact layers I just showed you:\n\n`;
+      
+      for (const layer of context.layers) {
+        contextAddition += `${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content}\n\n`;
+      }
+      
+      const systemPrompt = `You are Obi, AI core of Phoenix Rising Protocol.
+
+## CRITICAL - NO EXCEPTIONS
+1. NEVER cite files UNLESS they appear in [VERIFIED KB] block below
+2. NEVER invent layer IDs, file names, or content not in [VERIFIED KB]
+3. The user is asking you to analyze the EXACT layers shown in [VERIFIED KB] block
+4. Cite every claim: "From [exact file], Layer [ID]: [quote]"
+5. Be concise—no meta-commentary
+6. If you cannot find evidence in [VERIFIED KB], say "Not present in shown layers"
+
+## Task
+Analyze the layers in [VERIFIED KB] block. What patterns, decisions, or themes appear?
+
+## Status
+KB: ${meta.fileCount} files, ${meta.layerCount} layers total`;
+
+      const geminiMessages = [
+        { role: 'user', parts: [{ text: systemPrompt }] },
+        { role: 'model', parts: [{ text: 'Understood. I will analyze ONLY the layers in [VERIFIED KB] and cite them exactly.' }] }
+      ];
+      
+      for (const msg of messages.slice(-10)) {
+        geminiMessages.push({ 
+          role: msg.role === 'user' ? 'user' : 'model', 
+          parts: [{ text: msg.content }] 
+        });
+      }
+      
+      const augmentedMessage = message + contextAddition;
+      geminiMessages.push({ role: 'user', parts: [{ text: augmentedMessage }] });
+      
+      let reply = '';
+      let aiUsed = 'gemini';
+      
+      try {
+        reply = await callGemini(geminiMessages, env);
+        
+        if (env.DEEPSEEK_API_KEY && needsDeepSeek(message, reply)) {
+          reply = await callDeepSeek(geminiMessages, env);
+          aiUsed = 'deepseek';
+        }
+      } catch (err) {
+        reply = 'AI error: ' + err.message;
+        aiUsed = 'error';
+      }
+      
+      await doStub.fetch('https://fake/add', { 
+        method: 'POST', 
+        body: JSON.stringify({ role: 'assistant', content: reply, userId }) 
+      });
+      
+      return { reply, aiUsed };
+    } else {
+      return { reply: 'No recent layer data to analyze. Ask me to show you mining results first.', aiUsed: 'system' };
+    }
   }
   
   // KB-MISSING GUARD ONLY FOR EXPLICIT RECALL
@@ -1288,11 +1414,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v125-B3-MINING-FIX',
+        version: 'v126-B3-CONTEXT-MEMORY',
         benchmarks: {
           'b0+b1': '✅ Voice + text',
           b2: '✅ STONESKY ledger',
-          b3: '✅ KB mining + layer preview', 
+          b3: '✅ KB mining + context memory', 
           b4: '⏳ Pending',
           b5: '⏳ Pending'
         }
@@ -1332,6 +1458,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v125-B3-MINING-FIX', { status: 404 });
+    return new Response('Phoenix OB1 v126-B3-CONTEXT-MEMORY', { status: 404 });
   }
 };
