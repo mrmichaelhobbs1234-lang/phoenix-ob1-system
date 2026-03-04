@@ -1,11 +1,11 @@
-// reincarnate.js - Phoenix OB1 System v127-B3-DYNAMIC-INTENT
+// reincarnate.js - Phoenix OB1 System v128-B3-CONTEXT-ANALYSIS
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification (LIVE)
-// B3: Knowledge base mining with dynamic intent detection (FIXED)
+// B3: Knowledge base mining with reliable context analysis (FIXED)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
-// DEPLOY: 2026-03-04T09:31:00Z
-// SEALED: Gemini classifies follow-up intent instead of keyword matching
+// DEPLOY: 2026-03-04T09:39:00Z
+// SEALED: Context + short question = analyze shown layers (no intent classifier)
 
 const rateLimits = new Map();
 
@@ -197,29 +197,6 @@ async function getSessionContext(sessionId, env) {
     return await resp.json();
   } catch {
     return null;
-  }
-}
-
-async function detectFollowUpIntent(message, context, env) {
-  if (!context || !context.layers || context.layers.length === 0) return false;
-  
-  const prompt = `User message: "${message}"
-
-Recent context: I just showed the user ${context.layers.length} data layers from a knowledge base mining operation.
-
-Question: Is the user asking me to analyze, explain, or make sense of those layers I just showed?
-
-Reply ONLY with YES or NO.`;
-
-  try {
-    const resp = await callGemini([
-      { role: 'user', parts: [{ text: prompt }] }
-    ], env, 3000);
-    
-    const answer = resp.trim().toUpperCase();
-    return answer === 'YES' || answer.startsWith('YES');
-  } catch {
-    return false;
   }
 }
 
@@ -822,11 +799,11 @@ async function processChatMessage(message, sessionId, env) {
     return { reply: reply, aiUsed: 'system' };
   }
   
-  // DYNAMIC FOLLOW-UP DETECTION: let Gemini decide if this is analysis request
+  // SIMPLE FOLLOW-UP RULE: context exists + short question = analyze layers
   const context = await getSessionContext(sessionId, env);
-  const isFollowUpAnalysis = await detectFollowUpIntent(message, context, env);
+  const isShortQuestion = message.length < 100 && (isQuestionLike(message) || /\b(mean|tell|show|explain|break|analyze|sense)\b/i.test(message));
   
-  if (isFollowUpAnalysis && context && context.type === 'layer_sample' && context.layers && context.layers.length > 0) {
+  if (context && context.type === 'layer_sample' && context.layers && context.layers.length > 0 && isShortQuestion) {
     let contextAddition = '\n\n[VERIFIED KB - RECENTLY SHOWN LAYERS]\n';
     contextAddition += `These are the exact layers I just showed you:\n\n`;
     
@@ -897,7 +874,7 @@ KB: ${meta.fileCount} files, ${meta.layerCount} layers total`;
   let knowledgeStatus = '';
   
   // QUESTION-GATED KB SEARCH
-  if (meta && meta.fileCount && isQuestionLike(message)) {
+  if (meta && meta.fileCount && isQuestionLike(message) && !isShortQuestion) {
     knowledgeStatus = `KB: ${meta.fileCount} files, ${meta.layerCount} layers`;
     
     const queryResult = await queryKnowledgeBase(message, sessionId, env);
@@ -1424,11 +1401,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v127-B3-DYNAMIC-INTENT',
+        version: 'v128-B3-CONTEXT-ANALYSIS',
         benchmarks: {
           'b0+b1': '✅ Voice + text',
           b2: '✅ STONESKY ledger',
-          b3: '✅ KB mining + dynamic intent', 
+          b3: '✅ KB mining + context analysis', 
           b4: '⏳ Pending',
           b5: '⏳ Pending'
         }
@@ -1468,6 +1445,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v127-B3-DYNAMIC-INTENT', { status: 404 });
+    return new Response('Phoenix OB1 v128-B3-CONTEXT-ANALYSIS', { status: 404 });
   }
 };
