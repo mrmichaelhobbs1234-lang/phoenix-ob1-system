@@ -108,6 +108,7 @@ function isQuestionLike(msg) {
   const m = (msg || '').trim();
   if (!m) return false;
   if (m.endsWith('?')) return true;
+  if (/\b(tell me|show me|explain|describe)\b/i.test(m)) return true;
   return /\b(what|why|how|when|where|who|which)\b/i.test(m);
 }
 
