@@ -1,11 +1,11 @@
-// reincarnate.js - Phoenix OB1 System v124-FULL-AUDIT-SEALED
+// reincarnate.js - Phoenix OB1 System v125-B3-MINING-FIX
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification (LIVE)
-// B3: Knowledge base mining - dynamic status
+// B3: Knowledge base mining with layer preview (FIXED)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
-// DEPLOY: 2026-03-02T13:01:00Z
-// SEALED: Magic Chat + 20-fix audit complete
+// DEPLOY: 2026-03-04T09:10:00Z
+// SEALED: B3 mining meta-summary now shows actual layers
 
 const rateLimits = new Map();
 
@@ -100,6 +100,8 @@ function isMiningMetaSummaryRequest(msg) {
     m.includes('what did you see') ||
     m.includes('summary of mining') ||
     m.includes('summary of the files') ||
+    m.includes('tell me what you found') ||
+    m.includes('show me what you found') ||
     /from the \d+\s*(files?|logs?)/.test(m)
   );
 }
@@ -148,23 +150,28 @@ async function kbGetMeta(sessionId, env) {
   }
 }
 
-async function kbGetExamples(sessionId, env) {
+async function kbGetSampleLayers(sessionId, env, count = 5) {
   try {
     const doId = env.SESSIONS.idFromName(sessionId);
     const doStub = env.SESSIONS.get(doId);
-    const resp = await doStub.fetch('https://fake/knowledge/search?q=summary');
-    if (!resp.ok) return [];
-    const data = await resp.json();
+    const meta = await kbGetMeta(sessionId, env);
     
-    const results = data?.results || data?.matches || [];
-    const ex = results.slice(0, 3).map(r =>
-      r.snippet || r.preview || r.title || (typeof r === 'string' ? r : '')
-    ).filter(Boolean);
+    if (!meta || !meta.layerChunks) return [];
     
-    while (ex.length < 3) ex.push('(none)');
-    return ex.slice(0, 3);
+    const allLayers = [];
+    for (let i = 0; i < meta.layerChunks; i++) {
+      const chunk = await doStub.fetch(`https://fake/knowledge/chunk?index=${i}`);
+      if (chunk.ok) {
+        const data = await chunk.json();
+        allLayers.push(...data);
+      }
+    }
+    
+    // Return random sample
+    const shuffled = allLayers.sort(() => 0.5 - Math.random());
+    return shuffled.slice(0, count);
   } catch {
-    return ['(none)', '(none)', '(none)'];
+    return [];
   }
 }
 
@@ -239,6 +246,15 @@ export class SessionDO {
     if (url.pathname === '/knowledge/get') {
       const meta = await this.state.storage.get('knowledge:meta') || { fileCount: 0, layerCount: 0, lastMined: null };
       return new Response(JSON.stringify(meta), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (url.pathname === '/knowledge/chunk') {
+      const params = new URL(request.url).searchParams;
+      const index = parseInt(params.get('index') || '0');
+      const chunk = await this.state.storage.get(`layers:chunk:${index}`) || [];
+      return new Response(JSON.stringify(chunk), {
         headers: { 'Content-Type': 'application/json' }
       });
     }
@@ -716,18 +732,24 @@ async function processChatMessage(message, sessionId, env) {
   // PULL KB META ONCE
   const meta = await kbGetMeta(sessionId, env);
   
-  // MINING META-SUMMARY BRANCH
+  // MINING META-SUMMARY BRANCH - SHOW ACTUAL LAYERS
   if (isMiningMetaSummaryRequest(message)) {
     if (!meta || !meta.fileCount) {
       return { reply: 'No knowledge base loaded. Ask me to mine the logs first.', aiUsed: 'system' };
     }
-    const ex = await kbGetExamples(sessionId, env);
-    return {
-      reply:
-        `Mined: ${meta.fileCount} files, ${meta.layerCount || 0} layers.\n` +
-        `Examples:\n- ${ex[0]}\n- ${ex[1]}\n- ${ex[2]}`,
-      aiUsed: 'system'
-    };
+    
+    const sampleLayers = await kbGetSampleLayers(sessionId, env, 5);
+    let reply = `Mined: ${meta.fileCount} files, ${meta.layerCount || 0} layers.\n\nSample findings:\n`;
+    
+    if (sampleLayers.length === 0) {
+      reply += '(No layers extracted yet)';
+    } else {
+      for (const layer of sampleLayers) {
+        reply += `\n${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content.slice(0, 150)}...\n`;
+      }
+    }
+    
+    return { reply: reply, aiUsed: 'system' };
   }
   
   // KB-MISSING GUARD ONLY FOR EXPLICIT RECALL
@@ -1266,11 +1288,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v124-FULL-AUDIT-SEALED',
+        version: 'v125-B3-MINING-FIX',
         benchmarks: {
           'b0+b1': '✅ Voice + text',
           b2: '✅ STONESKY ledger',
-          b3: '⚠️ Dynamic (mine to load)', 
+          b3: '✅ KB mining + layer preview', 
           b4: '⏳ Pending',
           b5: '⏳ Pending'
         }
@@ -1310,6 +1332,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v124-FULL-AUDIT-SEALED', { status: 404 });
+    return new Response('Phoenix OB1 v125-B3-MINING-FIX', { status: 404 });
   }
 };
