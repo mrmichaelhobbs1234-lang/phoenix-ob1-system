@@ -1,11 +1,11 @@
-// reincarnate.js - Phoenix OB1 System v128-B3-CONTEXT-ANALYSIS
+// reincarnate.js - Phoenix OB1 System v129-B3-SMART-SUMMARY
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification (LIVE)
-// B3: Knowledge base mining with reliable context analysis (FIXED)
+// B3: Knowledge base mining with Gemini-powered summaries (FIXED)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
-// DEPLOY: 2026-03-04T09:39:00Z
-// SEALED: Context + short question = analyze shown layers (no intent classifier)
+// DEPLOY: 2026-03-04T09:51:00Z
+// SEALED: Gemini sees and summarizes extracted layers
 
 const rateLimits = new Map();
 
@@ -98,6 +98,7 @@ function isMiningMetaSummaryRequest(msg) {
     m.includes('what did you learn') ||
     m.includes('what did you find') ||
     m.includes('what did you see') ||
+    m.includes('what did you extract') ||
     m.includes('summary of mining') ||
     m.includes('summary of the files') ||
     m.includes('tell me what you found') ||
@@ -772,31 +773,61 @@ async function processChatMessage(message, sessionId, env) {
   // PULL KB META ONCE
   const meta = await kbGetMeta(sessionId, env);
   
-  // MINING META-SUMMARY BRANCH - SHOW ACTUAL LAYERS
+  // MINING META-SUMMARY BRANCH - GEMINI SUMMARIZES LAYERS
   if (isMiningMetaSummaryRequest(message)) {
     if (!meta || !meta.fileCount) {
       return { reply: 'No knowledge base loaded. Ask me to mine the logs first.', aiUsed: 'system' };
     }
     
     const sampleLayers = await kbGetSampleLayers(sessionId, env, 5);
-    let reply = `Mined: ${meta.fileCount} files, ${meta.layerCount || 0} layers.\n\nSample findings:\n`;
     
     if (sampleLayers.length === 0) {
-      reply += '(No layers extracted yet)';
-    } else {
-      for (const layer of sampleLayers) {
-        reply += `\n${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content.slice(0, 150)}...\n`;
-      }
+      return { reply: `Mined: ${meta.fileCount} files, ${meta.layerCount || 0} layers. No layers extracted yet.`, aiUsed: 'system' };
     }
     
-    // STORE LAYERS IN SESSION CONTEXT FOR FOLLOW-UP
+    // Build context block for Gemini
+    let contextBlock = '\n\n[VERIFIED KB - SAMPLE LAYERS]\n';
+    for (const layer of sampleLayers) {
+      contextBlock += `${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content}\n\n`;
+    }
+    
+    const summaryPrompt = `I mined ${meta.fileCount} files and extracted ${meta.layerCount} layers total. Here are 5 sample layers:
+${contextBlock}
+
+Summarize what these layers reveal. Be concise—focus on key patterns, decisions, and themes.`;
+    
+    let reply = '';
+    let aiUsed = 'gemini';
+    
+    try {
+      reply = await callGemini([
+        { role: 'user', parts: [{ text: summaryPrompt }] }
+      ], env);
+      
+      if (env.DEEPSEEK_API_KEY && needsDeepSeek(message, reply)) {
+        reply = await callDeepSeek([
+          { role: 'user', parts: [{ text: summaryPrompt }] }
+        ], env);
+        aiUsed = 'deepseek';
+      }
+    } catch (err) {
+      reply = `Mined: ${meta.fileCount} files, ${meta.layerCount} layers. AI summary failed: ${err.message}`;
+      aiUsed = 'error';
+    }
+    
+    // Store layers in context for follow-ups
     await setSessionContext(sessionId, env, {
       type: 'layer_sample',
       layers: sampleLayers,
       timestamp: new Date().toISOString()
     });
     
-    return { reply: reply, aiUsed: 'system' };
+    await doStub.fetch('https://fake/add', { 
+      method: 'POST', 
+      body: JSON.stringify({ role: 'assistant', content: reply, userId }) 
+    });
+    
+    return { reply, aiUsed };
   }
   
   // SIMPLE FOLLOW-UP RULE: context exists + short question = analyze layers
@@ -1401,11 +1432,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v128-B3-CONTEXT-ANALYSIS',
+        version: 'v129-B3-SMART-SUMMARY',
         benchmarks: {
           'b0+b1': '✅ Voice + text',
           b2: '✅ STONESKY ledger',
-          b3: '✅ KB mining + context analysis', 
+          b3: '✅ KB mining + Gemini summaries', 
           b4: '⏳ Pending',
           b5: '⏳ Pending'
         }
@@ -1445,6 +1476,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v128-B3-CONTEXT-ANALYSIS', { status: 404 });
+    return new Response('Phoenix OB1 v129-B3-SMART-SUMMARY', { status: 404 });
   }
 };
