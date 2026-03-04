@@ -4,8 +4,8 @@
 // B3: Knowledge base mining with session context memory (FIXED)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
-// DEPLOY: 2026-03-04T09:20:00Z
-// SEALED: B3 now remembers last-shown layers for follow-up questions
+// DEPLOY: 2026-03-04T09:27:00Z
+// SEALED: Gemini model fixed to gemini-1.5-flash
 
 const rateLimits = new Map();
 
@@ -111,6 +111,7 @@ function isFollowUpAnalysisRequest(msg) {
   return (
     /\b(make sense|explain|analyze|what does (this|that|it) mean|interpret)\b/i.test(msg) ||
     /\b(what'?s|whats) (this|that|it) (about|mean|saying)\b/i.test(msg) ||
+    /\b(alright|ok|okay) let'?s analyze/i.test(msg) ||
     m === 'make sense of it' ||
     m === 'explain this' ||
     m === 'what does this mean'
@@ -495,7 +496,7 @@ async function callGemini(messages, env, timeoutMs = 10000) {
   
   try {
     const response = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=' + env.GEMINI_API_KEY,
+      'https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=' + env.GEMINI_API_KEY,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
