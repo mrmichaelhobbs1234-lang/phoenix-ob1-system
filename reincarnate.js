@@ -1052,6 +1052,7 @@ export default {
       })();
       
       serverWs.addEventListener('message', (event) => {
+        if (typeof event.data === 'string') return;
         if (dgWs && dgWs.readyState === 1) {
           dgWs.send(event.data);
         }
