@@ -1,4 +1,4 @@
-name = "phoenix-ob1-system"
+name = "phoenix-ob1"
 main = "reincarnate.js"
 compatibility_date = "2024-04-01"
 compatibility_flags = ["nodejs_compat"]
