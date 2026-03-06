@@ -8,7 +8,7 @@
 // DEPLOY: 2026-03-06T21:17:00Z
 // SEALED: B2 prevHash + StudentProfileDO endpoints + context injection
 // FIX: Force-enable audio track in Chrome incognito (muted track issue)
-// FIX: Add encoding=webm-opus to Deepgram WS URL (encoding mismatch)
+// TEST: Revert to nova-2 + webm-opus (diagnosis)
 
 const rateLimits = new Map();
 
@@ -1808,7 +1808,7 @@ export default {
       const serverWs = pair[1];
       serverWs.accept();
 
-      const deepgramUrl = 'https://api.deepgram.com/v1/listen?model=nova-3&encoding=webm-opus&smart_format=true&interim_results=true&detect_language=true&punctuate=true';
+      const deepgramUrl = 'https://api.deepgram.com/v1/listen?model=nova-2&encoding=webm-opus&smart_format=true&interim_results=true';
       
       let dgWs = null;
       
@@ -1972,9 +1972,9 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v132-WIRING',
+        version: 'v132-TEST-NOVA2',
         benchmarks: {
-          'b0+b1': '✅ Voice + text',
+          'b0+b1': '🧪 Voice TEST (nova-2 + webm-opus)',
           b2: '✅ STONESKY ledger + 4-leaf Merkle',
           b3: '✅ KB mining + DeepSeek summaries', 
           'b0-b': '🔌 Endpoints + context wired',
@@ -2030,6 +2030,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v132-WIRING', { status: 404 });
+    return new Response('Phoenix OB1 v132-TEST-NOVA2', { status: 404 });
   }
 };
