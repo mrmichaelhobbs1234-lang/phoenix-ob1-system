@@ -8,6 +8,7 @@
 // DEPLOY: 2026-03-06T21:17:00Z
 // SEALED: B2 prevHash + StudentProfileDO endpoints + context injection
 // FIX: Force-enable audio track in Chrome incognito (muted track issue)
+// FIX: Add encoding=webm-opus to Deepgram WS URL (encoding mismatch)
 
 const rateLimits = new Map();
 
@@ -1807,7 +1808,7 @@ export default {
       const serverWs = pair[1];
       serverWs.accept();
 
-      const deepgramUrl = 'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&interim_results=true&detect_language=true&punctuate=true';
+      const deepgramUrl = 'https://api.deepgram.com/v1/listen?model=nova-3&encoding=webm-opus&smart_format=true&interim_results=true&detect_language=true&punctuate=true';
       
       let dgWs = null;
       
