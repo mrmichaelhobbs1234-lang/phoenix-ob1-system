@@ -1,10 +1,10 @@
-// reincarnate.js - Phoenix OB1 System v130-B2-STONESKY-COMPLETE
+// reincarnate.js - Phoenix OB1 System v130-B3-DEEPSEEK-PRIMARY
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification + 4-leaf lattice (COMPLETE)
-// B3: Knowledge base mining with Gemini-powered summaries (FIXED)
+// B3: Knowledge base mining with DeepSeek-powered summaries (UPDATED)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
-// DEPLOY: 2026-03-06T09:23:00Z
+// DEPLOY: 2026-03-06T11:00:00Z
 // SEALED: B2 prevHash enforcement + 4-leaf Merkle root
 
 const rateLimits = new Map();
@@ -494,7 +494,7 @@ export class SessionDO {
   }
 }
 
-function needsDeepSeek(message, geminiReply) {
+function needsGemini(message, deepseekReply) {
   const triggers = [
     /what is|define|explain|tell me about/i,
     /soul|dna|protocol|benchmark/i,
@@ -511,7 +511,7 @@ function needsDeepSeek(message, geminiReply) {
     /i don't have enough/i,
     /i cannot/i,
     /from conversation/i
-  ].some(regex => regex.test(geminiReply));
+  ].some(regex => regex.test(deepseekReply));
   
   return isTechnical || weakResponse;
 }
@@ -792,8 +792,8 @@ async function processChatMessage(message, sessionId, env) {
     return { reply: 'Rate limit: 10 msg/min', aiUsed: 'error' };
   }
   
-  if (!env.GEMINI_API_KEY) {
-    return { reply: 'GEMINI_API_KEY missing', aiUsed: 'error' };
+  if (!env.DEEPSEEK_API_KEY) {
+    return { reply: 'DEEPSEEK_API_KEY missing', aiUsed: 'error' };
   }
   
   const doId = env.SESSIONS.idFromName(sessionId);
@@ -840,7 +840,7 @@ async function processChatMessage(message, sessionId, env) {
   // PULL KB META ONCE
   const meta = await kbGetMeta(sessionId, env);
   
-  // MINING META-SUMMARY BRANCH - GEMINI SUMMARIZES LAYERS
+  // MINING META-SUMMARY BRANCH - DEEPSEEK SUMMARIZES LAYERS
   if (isMiningMetaSummaryRequest(message)) {
     if (!meta || !meta.fileCount) {
       return { reply: 'No knowledge base loaded. Ask me to mine the logs first.', aiUsed: 'system' };
@@ -852,7 +852,7 @@ async function processChatMessage(message, sessionId, env) {
       return { reply: `Mined: ${meta.fileCount} files, ${meta.layerCount || 0} layers. No layers extracted yet.`, aiUsed: 'system' };
     }
     
-    // Build context block for Gemini
+    // Build context block for AI
     let contextBlock = '\n\n[VERIFIED KB - SAMPLE LAYERS]\n';
     for (const layer of sampleLayers) {
       contextBlock += `${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content}\n\n`;
@@ -864,18 +864,18 @@ ${contextBlock}
 Summarize what these layers reveal. Be concise—focus on key patterns, decisions, and themes.`;
     
     let reply = '';
-    let aiUsed = 'gemini';
+    let aiUsed = 'deepseek';
     
     try {
-      reply = await callGemini([
+      reply = await callDeepSeek([
         { role: 'user', parts: [{ text: summaryPrompt }] }
       ], env);
       
-      if (env.DEEPSEEK_API_KEY && needsDeepSeek(message, reply)) {
-        reply = await callDeepSeek([
+      if (env.GEMINI_API_KEY && needsGemini(message, reply)) {
+        reply = await callGemini([
           { role: 'user', parts: [{ text: summaryPrompt }] }
         ], env);
-        aiUsed = 'deepseek';
+        aiUsed = 'gemini';
       }
     } catch (err) {
       reply = `Mined: ${meta.fileCount} files, ${meta.layerCount} layers. AI summary failed: ${err.message}`;
@@ -925,30 +925,30 @@ Analyze the layers in [VERIFIED KB] block. What patterns, decisions, or themes a
 ## Status
 KB: ${meta.fileCount} files, ${meta.layerCount} layers total`;
 
-    const geminiMessages = [
+    const deepseekMessages = [
       { role: 'user', parts: [{ text: systemPrompt }] },
       { role: 'model', parts: [{ text: 'Understood. I will analyze ONLY the layers in [VERIFIED KB] and cite them exactly.' }] }
     ];
     
     for (const msg of messages.slice(-10)) {
-      geminiMessages.push({ 
+      deepseekMessages.push({ 
         role: msg.role === 'user' ? 'user' : 'model', 
         parts: [{ text: msg.content }] 
       });
     }
     
     const augmentedMessage = message + contextAddition;
-    geminiMessages.push({ role: 'user', parts: [{ text: augmentedMessage }] });
+    deepseekMessages.push({ role: 'user', parts: [{ text: augmentedMessage }] });
     
     let reply = '';
-    let aiUsed = 'gemini';
+    let aiUsed = 'deepseek';
     
     try {
-      reply = await callGemini(geminiMessages, env);
+      reply = await callDeepSeek(deepseekMessages, env);
       
-      if (env.DEEPSEEK_API_KEY && needsDeepSeek(message, reply)) {
-        reply = await callDeepSeek(geminiMessages, env);
-        aiUsed = 'deepseek';
+      if (env.GEMINI_API_KEY && needsGemini(message, reply)) {
+        reply = await callGemini(deepseekMessages, env);
+        aiUsed = 'gemini';
       }
     } catch (err) {
       reply = 'AI error: ' + err.message;
@@ -1041,37 +1041,37 @@ ${knowledgeStatus || 'KB not mined'}
 Cite: "From [exact file], Layer [ID]: [quote]"
 Only cite sources in [VERIFIED KB] block above.`;
 
-  const geminiMessages = [
+  const deepseekMessages = [
     { role: 'user', parts: [{ text: systemPrompt }] },
     { role: 'model', parts: [{ text: 'Understood. Concise, no greetings, no echo, cite only verified sources.' }] }
   ];
   
   for (const msg of messages.slice(-10)) {
-    geminiMessages.push({ 
+    deepseekMessages.push({ 
       role: msg.role === 'user' ? 'user' : 'model', 
       parts: [{ text: msg.content }] 
     });
   }
   
   const augmentedMessage = message + contextAddition;
-  geminiMessages.push({ role: 'user', parts: [{ text: augmentedMessage }] });
+  deepseekMessages.push({ role: 'user', parts: [{ text: augmentedMessage }] });
   
   let reply = '';
-  let aiUsed = 'gemini';
+  let aiUsed = 'deepseek';
   
   if (specialAction) {
     reply = specialAction;
     aiUsed = 'system';
   } else {
     try {
-      reply = await callGemini(geminiMessages, env);
+      reply = await callDeepSeek(deepseekMessages, env);
       
       // ECHO/COPYCAT DETECTION
       const similarity = stringSimilarity(message, reply);
       if (similarity >= 0.85) {
-        geminiMessages.push({ role: 'model', parts: [{ text: reply }] });
-        geminiMessages.push({ role: 'user', parts: [{ text: 'DO NOT ECHO. Add new value.' }] });
-        reply = await callGemini(geminiMessages, env);
+        deepseekMessages.push({ role: 'model', parts: [{ text: reply }] });
+        deepseekMessages.push({ role: 'user', parts: [{ text: 'DO NOT ECHO. Add new value.' }] });
+        reply = await callDeepSeek(deepseekMessages, env);
         const retrySimilarity = stringSimilarity(message, reply);
         if (retrySimilarity >= 0.85) {
           reply = 'ECHOLOOP detected. Unable to generate non-echo response.';
@@ -1079,23 +1079,23 @@ Only cite sources in [VERIFIED KB] block above.`;
         }
       }
       
-      if (env.DEEPSEEK_API_KEY && needsDeepSeek(message, reply)) {
-        reply = await callDeepSeek(geminiMessages, env);
-        aiUsed = 'deepseek';
+      if (env.GEMINI_API_KEY && needsGemini(message, reply)) {
+        reply = await callGemini(deepseekMessages, env);
+        aiUsed = 'gemini';
       }
-    } catch (geminiError) {
-      console.error('AI error (redacted):', redactSecrets({ error: geminiError.message }));
-      if (env.DEEPSEEK_API_KEY) {
+    } catch (deepseekError) {
+      console.error('AI error (redacted):', redactSecrets({ error: deepseekError.message }));
+      if (env.GEMINI_API_KEY) {
         try {
-          reply = await callDeepSeek(geminiMessages, env);
-          aiUsed = 'deepseek-fallback';
-        } catch (deepseekError) {
+          reply = await callGemini(deepseekMessages, env);
+          aiUsed = 'gemini-fallback';
+        } catch (geminiError) {
           // MINIMAL ERROR: component + probable cause + next action
-          reply = 'AI error: Gemini + DeepSeek failed. Check API keys.';
+          reply = 'AI error: DeepSeek + Gemini failed. Check API keys.';
           aiUsed = 'error';
         }
       } else {
-        reply = 'Gemini error: ' + geminiError.message;
+        reply = 'DeepSeek error: ' + deepseekError.message;
         aiUsed = 'error';
       }
     }
@@ -1499,11 +1499,11 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v130-B2-STONESKY-COMPLETE',
+        version: 'v130-B3-DEEPSEEK-PRIMARY',
         benchmarks: {
           'b0+b1': '✅ Voice + text',
           b2: '✅ STONESKY ledger + 4-leaf Merkle',
-          b3: '✅ KB mining + Gemini summaries', 
+          b3: '✅ KB mining + DeepSeek summaries', 
           b4: '⏳ Pending',
           b5: '⏳ Pending'
         }
@@ -1543,6 +1543,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v130-B2-STONESKY-COMPLETE', { status: 404 });
+    return new Response('Phoenix OB1 v130-B3-DEEPSEEK-PRIMARY', { status: 404 });
   }
 };
