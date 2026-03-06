@@ -1,12 +1,12 @@
-// reincarnate.js - Phoenix OB1 System v130-B0B-COMPLETE
+// reincarnate.js - Phoenix OB1 System v131-SHARDING-FIX
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification + 4-leaf lattice (COMPLETE)
 // B3: Knowledge base mining with DeepSeek-powered summaries (UPDATED)
-// B0-B: Pronunciation training + student profiles (COMPLETE)
+// B0-B: Pronunciation training + student profiles (SHARDING FIX)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
-// DEPLOY: 2026-03-06T19:00:00Z
-// SEALED: B2 prevHash + B0-B student profiles + nova-3 pronunciation
+// DEPLOY: 2026-03-06T21:11:00Z
+// SEALED: B2 prevHash + per-student DO sharding
 
 const rateLimits = new Map();
 
@@ -87,7 +87,7 @@ function isGreeting(msg) {
 function isExplicitMineCommand(msg) {
   const m = norm(msg);
   if (!m.includes('mine')) return false;
-  if (/\bmine\s+(is|was|has|been)\b/.test(m) || /that['']?s\s+mine/.test(m)) return false;
+  if (/\bmine\s+(is|was|has|been)\b/.test(m) || /that[']?s\s+mine/.test(m)) return false;
   return /(logs?|chat|knowledge|kb|history|files?)/.test(m) ||
          /(refresh|reload)\s+(knowledge|kb|knowledge base)/.test(m);
 }
@@ -1108,10 +1108,7 @@ async function processChatMessage(message, sessionId, env) {
       contextBlock += `${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content}\n\n`;
     }
     
-    const summaryPrompt = `I mined ${meta.fileCount} files and extracted ${meta.layerCount} layers total. Here are 5 sample layers:
-${contextBlock}
-
-Summarize what these layers reveal. Be concise—focus on key patterns, decisions, and themes.`;
+    const summaryPrompt = `I mined ${meta.fileCount} files and extracted ${meta.layerCount} layers total. Here are 5 sample layers:\n${contextBlock}\n\nSummarize what these layers reveal. Be concise—focus on key patterns, decisions, and themes.`;
     
     let reply = '';
     let aiUsed = 'deepseek';
@@ -1743,12 +1740,12 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v130-B0B-COMPLETE',
+        version: 'v131-SHARDING-FIX',
         benchmarks: {
           'b0+b1': '✅ Voice + text',
           b2: '✅ STONESKY ledger + 4-leaf Merkle',
           b3: '✅ KB mining + DeepSeek summaries', 
-          'b0-b': '✅ Pronunciation training + student profiles',
+          'b0-b': '🔧 Per-student DO sharding',
           b4: '⏳ Pedagogy (next)',
           b5: '⏳ Pending'
         }
@@ -1788,6 +1785,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v130-B0B-COMPLETE', { status: 404 });
+    return new Response('Phoenix OB1 v131-SHARDING-FIX', { status: 404 });
   }
 };
