@@ -1,12 +1,12 @@
-// reincarnate.js - Phoenix OB1 System v131-SHARDING-FIX
+// reincarnate.js - Phoenix OB1 System v132-WIRING
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification + 4-leaf lattice (COMPLETE)
 // B3: Knowledge base mining with DeepSeek-powered summaries (UPDATED)
-// B0-B: Pronunciation training + student profiles (SHARDING FIX)
+// B0-B: Pronunciation training + student profiles (WIRING COMPLETE)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
-// DEPLOY: 2026-03-06T21:11:00Z
-// SEALED: B2 prevHash + per-student DO sharding
+// DEPLOY: 2026-03-06T21:17:00Z
+// SEALED: B2 prevHash + StudentProfileDO endpoints + context injection
 
 const rateLimits = new Map();
 
@@ -1034,6 +1034,40 @@ async function processChatMessage(message, sessionId, env) {
     throw new Error('Missing message or sessionId');
   }
   
+  // CONNECTION 3: Fetch student profile for context injection
+  let studentContext = '';
+  try {
+    const cookies = env.__cookies || {};
+    const studentId = cookies.phoenix_student_id;
+    
+    if (studentId && env.STUDENT_PROFILES) {
+      const profileDoId = env.STUDENT_PROFILES.idFromName(studentId);
+      const profileStub = env.STUDENT_PROFILES.get(profileDoId);
+      const profileResp = await profileStub.fetch(`https://fake/profile/get?student_id=${studentId}`);
+      
+      if (profileResp.ok) {
+        const profile = await profileResp.json();
+        if (profile) {
+          const weakPhonemes = JSON.parse(profile.weak_phonemes || '[]').join(', ') || 'none yet';
+          const strongPhonemes = JSON.parse(profile.strong_phonemes || '[]').join(', ') || 'none yet';
+          
+          studentContext = `\n\n## STUDENT CONTEXT\n` +
+            `Name: ${profile.name}\n` +
+            `Age: ${profile.age}, Region: ${profile.region}\n` +
+            `Level: ${profile.level}/10\n` +
+            `Goals: ${profile.goals || 'not specified'}\n` +
+            `Weak phonemes: [${weakPhonemes}]\n` +
+            `Strong phonemes: [${strongPhonemes}]\n` +
+            `Sessions completed: ${profile.session_count}\n` +
+            `Total practice time: ${profile.total_minutes} minutes\n` +
+            `Last session: ${profile.last_session || 'never'}\n`;
+        }
+      }
+    }
+  } catch (err) {
+    // Silent fail - continue without student context
+  }
+  
   if (isRageSignal(message)) {
     return { reply: 'System failure detected. What specifically broke?', aiUsed: 'system' };
   }
@@ -1279,6 +1313,7 @@ Execute commands and answer questions for Michael Hobbs.
 
 ## Status
 ${knowledgeStatus || 'KB not mined'}
+${studentContext}
 
 ## Citation rule
 Cite: "From [exact file], Layer [ID]: [quote]"
@@ -1721,10 +1756,103 @@ export default {
       return new Response(null, { status: 101, webSocket: clientWs });
     }
     
+    if (url.pathname === '/student/resolve' && request.method === 'POST') {
+      // CONNECTION 1: Check if student profile exists via httpOnly cookie
+      const cookieHeader = request.headers.get('Cookie') || '';
+      const match = cookieHeader.match(/phoenix_student_id=([^;]+)/);
+      const studentId = match ? match[1] : null;
+      
+      if (!studentId) {
+        // Generate new student ID
+        const newStudentId = 'student-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        return new Response(JSON.stringify({ onboarding_required: true, studentId: newStudentId }), {
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Credentials': 'true',
+            'Set-Cookie': `phoenix_student_id=${newStudentId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`
+          }
+        });
+      }
+      
+      try {
+        const profileDoId = env.STUDENT_PROFILES.idFromName(studentId);
+        const profileStub = env.STUDENT_PROFILES.get(profileDoId);
+        const profileResp = await profileStub.fetch(`https://fake/profile/get?student_id=${studentId}`);
+        
+        if (!profileResp.ok) {
+          return new Response(JSON.stringify({ onboarding_required: true, studentId: studentId }), {
+            headers: { 
+              'Content-Type': 'application/json',
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Credentials': 'true'
+            }
+          });
+        }
+        
+        const profile = await profileResp.json();
+        
+        if (!profile || profile.onboarding_complete === 0) {
+          return new Response(JSON.stringify({ onboarding_required: true, studentId: studentId }), {
+            headers: { 
+              'Content-Type': 'application/json',
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Credentials': 'true'
+            }
+          });
+        }
+        
+        return new Response(JSON.stringify({ onboarding_required: false, studentId: studentId }), {
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Credentials': 'true'
+          }
+        });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), {
+          status: 500,
+          headers: { 
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Credentials': 'true'
+          }
+        });
+      }
+    }
+    
+    if (url.pathname === '/student/create' && request.method === 'POST') {
+      // CONNECTION 2: Create student profile and set httpOnly cookie
+      const { studentId, name, age, region, goals, hobbies } = await request.json();
+      
+      const profileDoId = env.STUDENT_PROFILES.idFromName(studentId);
+      const profileStub = env.STUDENT_PROFILES.get(profileDoId);
+      
+      await profileStub.fetch('https://fake/profile/create', {
+        method: 'POST',
+        body: JSON.stringify({ studentId, name, age, region, goals, hobbies })
+      });
+      
+      await profileStub.fetch('https://fake/profile/seal', {
+        method: 'POST',
+        body: JSON.stringify({ studentId })
+      });
+      
+      return new Response(JSON.stringify({ ok: true, studentId: studentId }), {
+        headers: { 
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Credentials': 'true',
+          'Set-Cookie': `phoenix_student_id=${studentId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`
+        }
+      });
+    }
+    
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         headers: {
           'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Credentials': 'true',
           'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
           'Access-Control-Allow-Headers': 'Content-Type, x-sovereign-key'
         }
@@ -1740,12 +1868,12 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v131-SHARDING-FIX',
+        version: 'v132-WIRING',
         benchmarks: {
           'b0+b1': '✅ Voice + text',
           b2: '✅ STONESKY ledger + 4-leaf Merkle',
           b3: '✅ KB mining + DeepSeek summaries', 
-          'b0-b': '🔧 Per-student DO sharding',
+          'b0-b': '🔌 Endpoints + context wired',
           b4: '⏳ Pedagogy (next)',
           b5: '⏳ Pending'
         }
@@ -1756,7 +1884,20 @@ export default {
     
     if (url.pathname === '/chat' && request.method === 'POST') {
       try {
-        const { message, sessionId } = await request.json();
+        const body = await request.json();
+        const { message, sessionId } = body;
+        
+        // Extract cookie for student context (handled in processChatMessage)
+        const cookieHeader = request.headers.get('Cookie') || '';
+        const match = cookieHeader.match(/phoenix_student_id=([^;]+)/);
+        
+        // Inject cookies into env-like context for processChatMessage
+        const envWithCookies = {
+          ...env,
+          __cookies: {
+            phoenix_student_id: match ? match[1] : null
+          }
+        };
         
         if (!message || !sessionId) {
           return new Response(JSON.stringify({ error: 'Missing message or sessionId' }), { 
@@ -1769,10 +1910,10 @@ export default {
           return new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { 
             status: 429, 
             headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
-          });
+          }); 
         }
         
-        const { reply, aiUsed } = await processChatMessage(message, sessionId, env);
+        const { reply, aiUsed } = await processChatMessage(message, sessionId, envWithCookies);
         
         return new Response(JSON.stringify({ ok: true, reply: reply, aiUsed: aiUsed, sessionId: sessionId }), { 
           headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
@@ -1785,6 +1926,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v131-SHARDING-FIX', { status: 404 });
+    return new Response('Phoenix OB1 v132-WIRING', { status: 404 });
   }
 };
