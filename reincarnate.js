@@ -7,6 +7,7 @@
 // Fail-closed. Reality-C. Agent 99.
 // DEPLOY: 2026-03-06T21:17:00Z
 // SEALED: B2 prevHash + StudentProfileDO endpoints + context injection
+// FIX: Force-enable audio track in Chrome incognito (muted track issue)
 
 const rateLimits = new Map();
 
@@ -1614,6 +1615,36 @@ const MAGIC_CHAT_HTML = `<!DOCTYPE html>
           }
           
           stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          
+          // FIX: Validate and force-enable audio track
+          const audioTracks = stream.getAudioTracks();
+          if (audioTracks.length === 0) {
+            throw new Error('No audio track available');
+          }
+          
+          const audioTrack = audioTracks[0];
+          
+          // Check if track is muted or not live
+          if (audioTrack.muted || audioTrack.readyState !== 'live') {
+            console.warn('Audio track muted or not live. Attempting fix...');
+            audioTrack.enabled = true;
+            
+            // Wait 100ms for track to activate
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+            // If still muted, re-request stream
+            if (audioTrack.muted || audioTrack.readyState !== 'live') {
+              console.warn('Track still muted. Re-requesting stream...');
+              stream.getTracks().forEach(t => t.stop());
+              stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+              
+              const newAudioTrack = stream.getAudioTracks()[0];
+              if (!newAudioTrack || newAudioTrack.muted || newAudioTrack.readyState !== 'live') {
+                throw new Error('Audio track is muted or unavailable after retry');
+              }
+            }
+          }
+          
           const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
             ? 'audio/webm;codecs=opus'
             : 'audio/webm';
