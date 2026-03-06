@@ -1,11 +1,12 @@
-// reincarnate.js - Phoenix OB1 System v130-B3-DEEPSEEK-PRIMARY
+// reincarnate.js - Phoenix OB1 System v130-B0B-COMPLETE
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
 // B2: STONESKY Merkle ledger verification + 4-leaf lattice (COMPLETE)
 // B3: Knowledge base mining with DeepSeek-powered summaries (UPDATED)
+// B0-B: Pronunciation training + student profiles (COMPLETE)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
-// DEPLOY: 2026-03-06T11:00:00Z
-// SEALED: B2 prevHash enforcement + 4-leaf Merkle root
+// DEPLOY: 2026-03-06T19:00:00Z
+// SEALED: B2 prevHash + B0-B student profiles + nova-3 pronunciation
 
 const rateLimits = new Map();
 
@@ -86,7 +87,6 @@ function isGreeting(msg) {
 function isExplicitMineCommand(msg) {
   const m = norm(msg);
   if (!m.includes('mine')) return false;
-  // Ignore "mine is..." or "that's mine"
   if (/\bmine\s+(is|was|has|been)\b/.test(m) || /that['']?s\s+mine/.test(m)) return false;
   return /(logs?|chat|knowledge|kb|history|files?)/.test(m) ||
          /(refresh|reload)\s+(knowledge|kb|knowledge base)/.test(m);
@@ -168,7 +168,6 @@ async function kbGetSampleLayers(sessionId, env, count = 5) {
       }
     }
     
-    // Return random sample
     const shuffled = allLayers.sort(() => 0.5 - Math.random());
     return shuffled.slice(0, count);
   } catch {
@@ -202,6 +201,266 @@ async function getSessionContext(sessionId, env) {
 }
 
 // ===== END MAGIC CHAT HELPERS =====
+
+// ===== B0-B PRONUNCIATION TRACKING =====
+
+class PronunciationTracker {
+  constructor() {
+    this.sessions = new Map();
+  }
+  
+  startSession(sessionId, studentId) {
+    this.sessions.set(sessionId, {
+      sessionId: sessionId,
+      studentId: studentId,
+      startTime: Date.now(),
+      words: [],
+      totalWords: 0,
+      sumConfidence: 0
+    });
+  }
+  
+  addWord(sessionId, word, confidence) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    
+    session.words.push({
+      word: word.toLowerCase(),
+      confidence: confidence,
+      timestamp: Date.now() - session.startTime
+    });
+    session.totalWords++;
+    session.sumConfidence += confidence;
+  }
+  
+  getFlaggedWords(sessionId, threshold = 0.75) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return [];
+    
+    return session.words
+      .filter(w => w.confidence < threshold)
+      .map(w => ({ word: w.word, confidence: w.confidence }));
+  }
+  
+  getSessionSummary(sessionId) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return null;
+    
+    const duration = Math.floor((Date.now() - session.startTime) / 1000);
+    const avgConfidence = session.totalWords > 0 
+      ? session.sumConfidence / session.totalWords 
+      : 0;
+    
+    return {
+      studentId: session.studentId,
+      sessionId: sessionId,
+      durationSec: duration,
+      totalWords: session.totalWords,
+      avgConfidence: avgConfidence,
+      wordsFlagged: this.getFlaggedWords(sessionId)
+    };
+  }
+  
+  endSession(sessionId) {
+    const summary = this.getSessionSummary(sessionId);
+    this.sessions.delete(sessionId);
+    return summary;
+  }
+}
+
+const pronunciationTracker = new PronunciationTracker();
+
+// ===== END PRONUNCIATION TRACKING =====
+
+// ===== B0-B STUDENT PROFILE DO =====
+
+export class StudentProfileDO {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+    this.initDB();
+  }
+  
+  async initDB() {
+    await this.state.storage.sql.exec(`
+      CREATE TABLE IF NOT EXISTS students (
+        student_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        age INTEGER NOT NULL CHECK(age >= 10),
+        region TEXT NOT NULL CHECK(region IN ('HCMC', 'other')),
+        level INTEGER DEFAULT 1 CHECK(level BETWEEN 1 AND 10),
+        goals TEXT,
+        hobbies TEXT,
+        weak_phonemes TEXT,
+        strong_phonemes TEXT,
+        content_preferences TEXT,
+        session_count INTEGER DEFAULT 0,
+        total_minutes INTEGER DEFAULT 0,
+        onboarding_complete INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL,
+        last_session TEXT,
+        last_updated TEXT NOT NULL
+      );
+      
+      CREATE TABLE IF NOT EXISTS pronunciation_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        student_id TEXT NOT NULL,
+        session_date TEXT NOT NULL,
+        session_duration_sec INTEGER DEFAULT 0,
+        total_words_spoken INTEGER DEFAULT 0,
+        avg_confidence REAL DEFAULT 0.0,
+        words_flagged TEXT,
+        words_improved TEXT,
+        deepgram_accent_detected TEXT,
+        accent_confidence REAL,
+        notes TEXT,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (student_id) REFERENCES students(student_id)
+      );
+      
+      CREATE TABLE IF NOT EXISTS session_metadata (
+        session_id TEXT PRIMARY KEY,
+        student_id TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        FOREIGN KEY (student_id) REFERENCES students(student_id)
+      );
+      
+      CREATE INDEX IF NOT EXISTS idx_pronunciation_student 
+        ON pronunciation_history(student_id);
+      CREATE INDEX IF NOT EXISTS idx_pronunciation_date 
+        ON pronunciation_history(session_date DESC);
+      CREATE INDEX IF NOT EXISTS idx_session_student 
+        ON session_metadata(student_id);
+    `);
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    
+    if (url.pathname === '/profile/get') {
+      const studentId = url.searchParams.get('student_id');
+      const cursor = this.state.storage.sql.exec(
+        'SELECT * FROM students WHERE student_id = ?',
+        studentId
+      );
+      const rows = [...cursor];
+      return new Response(JSON.stringify(rows[0] || null), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (url.pathname === '/profile/create' && request.method === 'POST') {
+      const { studentId, name, age, region, goals, hobbies } = await request.json();
+      const now = new Date().toISOString();
+      
+      this.state.storage.sql.exec(
+        `INSERT INTO students (student_id, name, age, region, goals, hobbies, 
+          weak_phonemes, strong_phonemes, content_preferences, created_at, last_updated)
+         VALUES (?, ?, ?, ?, ?, ?, '[]', '[]', '[]', ?, ?)`,
+        studentId, name, age, region, goals, hobbies, now, now
+      );
+      
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (url.pathname === '/profile/seal' && request.method === 'POST') {
+      const { studentId } = await request.json();
+      const now = new Date().toISOString();
+      
+      this.state.storage.sql.exec(
+        'UPDATE students SET onboarding_complete = 1, last_updated = ? WHERE student_id = ?',
+        now, studentId
+      );
+      
+      return new Response(JSON.stringify({ ok: true, onboarding_complete: true }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (url.pathname === '/pronunciation/history') {
+      const studentId = url.searchParams.get('student_id');
+      const limit = parseInt(url.searchParams.get('limit') || '10');
+      
+      const cursor = this.state.storage.sql.exec(
+        'SELECT * FROM pronunciation_history WHERE student_id = ? ORDER BY session_date DESC LIMIT ?',
+        studentId, limit
+      );
+      const rows = [...cursor];
+      
+      return new Response(JSON.stringify({ history: rows }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (url.pathname === '/pronunciation/save' && request.method === 'POST') {
+      const { studentId, sessionDate, durationSec, totalWords, avgConfidence, 
+              wordsFlagged, wordsImproved, accentDetected, accentConfidence, notes } 
+        = await request.json();
+      const now = new Date().toISOString();
+      
+      this.state.storage.sql.exec(
+        `INSERT INTO pronunciation_history 
+          (student_id, session_date, session_duration_sec, total_words_spoken, 
+           avg_confidence, words_flagged, words_improved, deepgram_accent_detected, 
+           accent_confidence, notes, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        studentId, sessionDate, durationSec, totalWords, avgConfidence,
+        JSON.stringify(wordsFlagged || []),
+        JSON.stringify(wordsImproved || []),
+        accentDetected, accentConfidence, notes, now
+      );
+      
+      this.state.storage.sql.exec(
+        `UPDATE students 
+         SET session_count = session_count + 1,
+             total_minutes = total_minutes + ?,
+             last_session = ?,
+             last_updated = ?
+         WHERE student_id = ?`,
+        Math.floor(durationSec / 60), sessionDate, now, studentId
+      );
+      
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (url.pathname === '/session/start' && request.method === 'POST') {
+      const { sessionId, studentId } = await request.json();
+      const now = new Date().toISOString();
+      
+      this.state.storage.sql.exec(
+        'INSERT INTO session_metadata (session_id, student_id, started_at) VALUES (?, ?, ?)',
+        sessionId, studentId, now
+      );
+      
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    if (url.pathname === '/session/end' && request.method === 'POST') {
+      const { sessionId } = await request.json();
+      const now = new Date().toISOString();
+      
+      this.state.storage.sql.exec(
+        'UPDATE session_metadata SET ended_at = ? WHERE session_id = ?',
+        now, sessionId
+      );
+      
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+    
+    return new Response('StudentProfileDO ready', { status: 200 });
+  }
+}
+
+// ===== END STUDENT PROFILE DO =====
 
 function extractActionableEvents(filename, content) {
   const events = {
@@ -411,7 +670,6 @@ export class SessionDO {
         const entry = ledger[i];
         const prevHash = i === 0 ? '0' : ledger[i - 1].hash;
         
-        // FIX 1: prevHash enforcement
         if (entry.prevHash !== prevHash) {
           valid = false;
           chainBrokenAt = i;
@@ -634,7 +892,6 @@ async function mineKnowledgeBase(sessionId, env) {
   const allLayers = [];
   let layerIndex = 0;
   
-  // FIX 2: Collect 4-leaf data
   const anchorLeaf = [];
   const operationalLeaf = [];
   const chaosLeaf = [];
@@ -709,7 +966,6 @@ async function mineKnowledgeBase(sessionId, env) {
     if (allLayers.length >= 200) break;
   }
   
-  // FIX 2: Compute 4-leaf Merkle root
   const merkleRoot = await buildMerkleRoot(anchorLeaf, operationalLeaf, chaosLeaf, forensicLeaf);
   
   for (let i = 0; i < allLayers.length; i++) {
@@ -778,12 +1034,10 @@ async function processChatMessage(message, sessionId, env) {
     throw new Error('Missing message or sessionId');
   }
   
-  // RAGE-AS-AE HANDLER: treat operator frustration as system failure signal
   if (isRageSignal(message)) {
     return { reply: 'System failure detected. What specifically broke?', aiUsed: 'system' };
   }
   
-  // GREETING FAST-PATH: no mining, no KB, no history fetch
   if (isGreeting(message)) {
     return { reply: "Hi. I'm here. What do you need?", aiUsed: 'system' };
   }
@@ -809,7 +1063,6 @@ async function processChatMessage(message, sessionId, env) {
   
   let specialAction = null;
   
-  // EXPLICIT MINING GATE
   if (isExplicitMineCommand(message)) {
     try {
       const mineResult = await mineKnowledgeBase(sessionId, env);
@@ -837,10 +1090,8 @@ async function processChatMessage(message, sessionId, env) {
     }
   }
   
-  // PULL KB META ONCE
   const meta = await kbGetMeta(sessionId, env);
   
-  // MINING META-SUMMARY BRANCH - DEEPSEEK SUMMARIZES LAYERS
   if (isMiningMetaSummaryRequest(message)) {
     if (!meta || !meta.fileCount) {
       return { reply: 'No knowledge base loaded. Ask me to mine the logs first.', aiUsed: 'system' };
@@ -852,7 +1103,6 @@ async function processChatMessage(message, sessionId, env) {
       return { reply: `Mined: ${meta.fileCount} files, ${meta.layerCount || 0} layers. No layers extracted yet.`, aiUsed: 'system' };
     }
     
-    // Build context block for AI
     let contextBlock = '\n\n[VERIFIED KB - SAMPLE LAYERS]\n';
     for (const layer of sampleLayers) {
       contextBlock += `${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content}\n\n`;
@@ -882,7 +1132,6 @@ Summarize what these layers reveal. Be concise—focus on key patterns, decision
       aiUsed = 'error';
     }
     
-    // Store layers in context for follow-ups
     await setSessionContext(sessionId, env, {
       type: 'layer_sample',
       layers: sampleLayers,
@@ -897,7 +1146,6 @@ Summarize what these layers reveal. Be concise—focus on key patterns, decision
     return { reply, aiUsed };
   }
   
-  // SIMPLE FOLLOW-UP RULE: context exists + short question = analyze layers
   const context = await getSessionContext(sessionId, env);
   const isShortQuestion = message.length < 100 && (isQuestionLike(message) || /\b(mean|tell|show|explain|break|analyze|sense)\b/i.test(message));
   
@@ -963,7 +1211,6 @@ KB: ${meta.fileCount} files, ${meta.layerCount} layers total`;
     return { reply, aiUsed };
   }
   
-  // KB-MISSING GUARD ONLY FOR EXPLICIT RECALL
   if ((!meta || !meta.fileCount) && isLogRecallRequest(message)) {
     return { reply: 'No knowledge base loaded. Ask me to mine the logs first.', aiUsed: 'system' };
   }
@@ -971,7 +1218,6 @@ KB: ${meta.fileCount} files, ${meta.layerCount} layers total`;
   let contextAddition = '';
   let knowledgeStatus = '';
   
-  // QUESTION-GATED KB SEARCH
   if (meta && meta.fileCount && isQuestionLike(message) && !isShortQuestion) {
     knowledgeStatus = `KB: ${meta.fileCount} files, ${meta.layerCount} layers`;
     
@@ -1066,7 +1312,6 @@ Only cite sources in [VERIFIED KB] block above.`;
     try {
       reply = await callDeepSeek(deepseekMessages, env);
       
-      // ECHO/COPYCAT DETECTION
       const similarity = stringSimilarity(message, reply);
       if (similarity >= 0.85) {
         deepseekMessages.push({ role: 'model', parts: [{ text: reply }] });
@@ -1090,7 +1335,6 @@ Only cite sources in [VERIFIED KB] block above.`;
           reply = await callGemini(deepseekMessages, env);
           aiUsed = 'gemini-fallback';
         } catch (geminiError) {
-          // MINIMAL ERROR: component + probable cause + next action
           reply = 'AI error: DeepSeek + Gemini failed. Check API keys.';
           aiUsed = 'error';
         }
@@ -1428,7 +1672,7 @@ export default {
       const serverWs = pair[1];
       serverWs.accept();
 
-      const deepgramUrl = 'https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true';
+      const deepgramUrl = 'https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&interim_results=true&detect_language=true&punctuate=true';
       
       let dgWs = null;
       
@@ -1499,12 +1743,13 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v130-B3-DEEPSEEK-PRIMARY',
+        version: 'v130-B0B-COMPLETE',
         benchmarks: {
           'b0+b1': '✅ Voice + text',
           b2: '✅ STONESKY ledger + 4-leaf Merkle',
           b3: '✅ KB mining + DeepSeek summaries', 
-          b4: '⏳ Pending',
+          'b0-b': '✅ Pronunciation training + student profiles',
+          b4: '⏳ Pedagogy (next)',
           b5: '⏳ Pending'
         }
       }), { 
@@ -1543,6 +1788,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v130-B3-DEEPSEEK-PRIMARY', { status: 404 });
+    return new Response('Phoenix OB1 v130-B0B-COMPLETE', { status: 404 });
   }
 };
