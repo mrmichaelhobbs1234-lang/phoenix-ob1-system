@@ -1,14 +1,9 @@
-// reincarnate.js - Phoenix OB1 System v132-WIRING
+// reincarnate.js - Phoenix OB1 System v119-PURE-DYNAMIC
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
-// B2: STONESKY Merkle ledger verification + 4-leaf lattice (COMPLETE)
-// B3: Knowledge base mining with DeepSeek-powered summaries (UPDATED)
-// B0-B: Pronunciation training + student profiles (WIRING COMPLETE)
+// B2: STONESKY Merkle ledger verification (LIVE)
+// B3: Knowledge base mining - smart verification layer
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
-// DEPLOY: 2026-03-06T21:17:00Z
-// SEALED: B2 prevHash + StudentProfileDO endpoints + context injection
-// FIX: Force-enable audio track in Chrome incognito (muted track issue)
-// TEST: Revert to nova-2 + webm-opus (diagnosis)
 
 const rateLimits = new Map();
 
@@ -71,399 +66,6 @@ async function sha256(data) {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// ===== MAGIC CHAT HELPERS - SEALED SPEC =====
-
-function norm(s) {
-  return (s || '').trim().toLowerCase();
-}
-
-function isGreeting(msg) {
-  const m = norm(msg);
-  if (!m) return false;
-  const exact = new Set(['hi', 'hey', 'hello', 'yo', 'sup', 'hiya']);
-  if (exact.has(m)) return true;
-  if (m.length <= 12 && (m === 'hi obi' || m === 'hey obi' || m === 'hello obi')) return true;
-  return false;
-}
-
-function isExplicitMineCommand(msg) {
-  const m = norm(msg);
-  if (!m.includes('mine')) return false;
-  if (/\bmine\s+(is|was|has|been)\b/.test(m) || /that[']?s\s+mine/.test(m)) return false;
-  return /(logs?|chat|knowledge|kb|history|files?)/.test(m) ||
-         /(refresh|reload)\s+(knowledge|kb|knowledge base)/.test(m);
-}
-
-function isMiningMetaSummaryRequest(msg) {
-  const m = norm(msg);
-  return (
-    m.includes('what did you learn') ||
-    m.includes('what did you find') ||
-    m.includes('what did you see') ||
-    m.includes('what did you extract') ||
-    m.includes('summary of mining') ||
-    m.includes('summary of the files') ||
-    m.includes('tell me what you found') ||
-    m.includes('show me what you found') ||
-    /from the \d+\s*(files?|logs?)/.test(m)
-  );
-}
-
-function isQuestionLike(msg) {
-  const m = (msg || '').trim();
-  if (!m) return false;
-  if (m.endsWith('?')) return true;
-  if (/\b(tell me|show me|describe)\b/i.test(m)) return true;
-  return /\b(what|why|how|when|where|who|which)\b/i.test(m);
-}
-
-function isLogRecallRequest(msg) {
-  const m = norm(msg);
-  return /(last time|yesterday|previous|earlier|in our past|search the logs|check the logs|look up in the logs|in our chat history|from our chats)/.test(m);
-}
-
-function isRageSignal(msg) {
-  const m = norm(msg);
-  return /\b(stop|fuck|fucking|dude|shit|wtf|jesus)\b/i.test(msg) && msg.length < 100;
-}
-
-function stringSimilarity(a, b) {
-  if (!a || !b) return 0;
-  const aLower = a.toLowerCase().trim();
-  const bLower = b.toLowerCase().trim();
-  if (aLower === bLower) return 1;
-  
-  const aWords = new Set(aLower.split(/\s+/));
-  const bWords = new Set(bLower.split(/\s+/));
-  const intersection = new Set([...aWords].filter(w => bWords.has(w)));
-  const union = new Set([...aWords, ...bWords]);
-  
-  return union.size === 0 ? 0 : intersection.size / union.size;
-}
-
-async function kbGetMeta(sessionId, env) {
-  try {
-    const doId = env.SESSIONS.idFromName(sessionId);
-    const doStub = env.SESSIONS.get(doId);
-    const resp = await doStub.fetch('https://fake/knowledge/get');
-    if (!resp.ok) return null;
-    return await resp.json();
-  } catch {
-    return null;
-  }
-}
-
-async function kbGetSampleLayers(sessionId, env, count = 5) {
-  try {
-    const doId = env.SESSIONS.idFromName(sessionId);
-    const doStub = env.SESSIONS.get(doId);
-    const meta = await kbGetMeta(sessionId, env);
-    
-    if (!meta || !meta.layerChunks) return [];
-    
-    const allLayers = [];
-    for (let i = 0; i < meta.layerChunks; i++) {
-      const chunk = await doStub.fetch(`https://fake/knowledge/chunk?index=${i}`);
-      if (chunk.ok) {
-        const data = await chunk.json();
-        allLayers.push(...data);
-      }
-    }
-    
-    const shuffled = allLayers.sort(() => 0.5 - Math.random());
-    return shuffled.slice(0, count);
-  } catch {
-    return [];
-  }
-}
-
-async function setSessionContext(sessionId, env, contextData) {
-  try {
-    const doId = env.SESSIONS.idFromName(sessionId);
-    const doStub = env.SESSIONS.get(doId);
-    await doStub.fetch('https://fake/context/set', {
-      method: 'POST',
-      body: JSON.stringify(contextData)
-    });
-  } catch (err) {
-    console.error('Failed to set context:', err);
-  }
-}
-
-async function getSessionContext(sessionId, env) {
-  try {
-    const doId = env.SESSIONS.idFromName(sessionId);
-    const doStub = env.SESSIONS.get(doId);
-    const resp = await doStub.fetch('https://fake/context/get');
-    if (!resp.ok) return null;
-    return await resp.json();
-  } catch {
-    return null;
-  }
-}
-
-// ===== END MAGIC CHAT HELPERS =====
-
-// ===== B0-B PRONUNCIATION TRACKING =====
-
-class PronunciationTracker {
-  constructor() {
-    this.sessions = new Map();
-  }
-  
-  startSession(sessionId, studentId) {
-    this.sessions.set(sessionId, {
-      sessionId: sessionId,
-      studentId: studentId,
-      startTime: Date.now(),
-      words: [],
-      totalWords: 0,
-      sumConfidence: 0
-    });
-  }
-  
-  addWord(sessionId, word, confidence) {
-    const session = this.sessions.get(sessionId);
-    if (!session) return;
-    
-    session.words.push({
-      word: word.toLowerCase(),
-      confidence: confidence,
-      timestamp: Date.now() - session.startTime
-    });
-    session.totalWords++;
-    session.sumConfidence += confidence;
-  }
-  
-  getFlaggedWords(sessionId, threshold = 0.75) {
-    const session = this.sessions.get(sessionId);
-    if (!session) return [];
-    
-    return session.words
-      .filter(w => w.confidence < threshold)
-      .map(w => ({ word: w.word, confidence: w.confidence }));
-  }
-  
-  getSessionSummary(sessionId) {
-    const session = this.sessions.get(sessionId);
-    if (!session) return null;
-    
-    const duration = Math.floor((Date.now() - session.startTime) / 1000);
-    const avgConfidence = session.totalWords > 0 
-      ? session.sumConfidence / session.totalWords 
-      : 0;
-    
-    return {
-      studentId: session.studentId,
-      sessionId: sessionId,
-      durationSec: duration,
-      totalWords: session.totalWords,
-      avgConfidence: avgConfidence,
-      wordsFlagged: this.getFlaggedWords(sessionId)
-    };
-  }
-  
-  endSession(sessionId) {
-    const summary = this.getSessionSummary(sessionId);
-    this.sessions.delete(sessionId);
-    return summary;
-  }
-}
-
-const pronunciationTracker = new PronunciationTracker();
-
-// ===== END PRONUNCIATION TRACKING =====
-
-// ===== B0-B STUDENT PROFILE DO =====
-
-export class StudentProfileDO {
-  constructor(state, env) {
-    this.state = state;
-    this.env = env;
-    this.initDB();
-  }
-  
-  async initDB() {
-    await this.state.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS students (
-        student_id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        age INTEGER NOT NULL CHECK(age >= 10),
-        region TEXT NOT NULL CHECK(region IN ('HCMC', 'other')),
-        level INTEGER DEFAULT 1 CHECK(level BETWEEN 1 AND 10),
-        goals TEXT,
-        hobbies TEXT,
-        weak_phonemes TEXT,
-        strong_phonemes TEXT,
-        content_preferences TEXT,
-        session_count INTEGER DEFAULT 0,
-        total_minutes INTEGER DEFAULT 0,
-        onboarding_complete INTEGER DEFAULT 0,
-        created_at TEXT NOT NULL,
-        last_session TEXT,
-        last_updated TEXT NOT NULL
-      );
-      
-      CREATE TABLE IF NOT EXISTS pronunciation_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        student_id TEXT NOT NULL,
-        session_date TEXT NOT NULL,
-        session_duration_sec INTEGER DEFAULT 0,
-        total_words_spoken INTEGER DEFAULT 0,
-        avg_confidence REAL DEFAULT 0.0,
-        words_flagged TEXT,
-        words_improved TEXT,
-        deepgram_accent_detected TEXT,
-        accent_confidence REAL,
-        notes TEXT,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (student_id) REFERENCES students(student_id)
-      );
-      
-      CREATE TABLE IF NOT EXISTS session_metadata (
-        session_id TEXT PRIMARY KEY,
-        student_id TEXT NOT NULL,
-        started_at TEXT NOT NULL,
-        ended_at TEXT,
-        FOREIGN KEY (student_id) REFERENCES students(student_id)
-      );
-      
-      CREATE INDEX IF NOT EXISTS idx_pronunciation_student 
-        ON pronunciation_history(student_id);
-      CREATE INDEX IF NOT EXISTS idx_pronunciation_date 
-        ON pronunciation_history(session_date DESC);
-      CREATE INDEX IF NOT EXISTS idx_session_student 
-        ON session_metadata(student_id);
-    `);
-  }
-
-  async fetch(request) {
-    const url = new URL(request.url);
-    
-    if (url.pathname === '/profile/get') {
-      const studentId = url.searchParams.get('student_id');
-      const cursor = this.state.storage.sql.exec(
-        'SELECT * FROM students WHERE student_id = ?',
-        studentId
-      );
-      const rows = [...cursor];
-      return new Response(JSON.stringify(rows[0] || null), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    if (url.pathname === '/profile/create' && request.method === 'POST') {
-      const { studentId, name, age, region, goals, hobbies } = await request.json();
-      const now = new Date().toISOString();
-      
-      this.state.storage.sql.exec(
-        `INSERT INTO students (student_id, name, age, region, goals, hobbies, 
-          weak_phonemes, strong_phonemes, content_preferences, created_at, last_updated)
-         VALUES (?, ?, ?, ?, ?, ?, '[]', '[]', '[]', ?, ?)`,
-        studentId, name, age, region, goals, hobbies, now, now
-      );
-      
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    if (url.pathname === '/profile/seal' && request.method === 'POST') {
-      const { studentId } = await request.json();
-      const now = new Date().toISOString();
-      
-      this.state.storage.sql.exec(
-        'UPDATE students SET onboarding_complete = 1, last_updated = ? WHERE student_id = ?',
-        now, studentId
-      );
-      
-      return new Response(JSON.stringify({ ok: true, onboarding_complete: true }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    if (url.pathname === '/pronunciation/history') {
-      const studentId = url.searchParams.get('student_id');
-      const limit = parseInt(url.searchParams.get('limit') || '10');
-      
-      const cursor = this.state.storage.sql.exec(
-        'SELECT * FROM pronunciation_history WHERE student_id = ? ORDER BY session_date DESC LIMIT ?',
-        studentId, limit
-      );
-      const rows = [...cursor];
-      
-      return new Response(JSON.stringify({ history: rows }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    if (url.pathname === '/pronunciation/save' && request.method === 'POST') {
-      const { studentId, sessionDate, durationSec, totalWords, avgConfidence, 
-              wordsFlagged, wordsImproved, accentDetected, accentConfidence, notes } 
-        = await request.json();
-      const now = new Date().toISOString();
-      
-      this.state.storage.sql.exec(
-        `INSERT INTO pronunciation_history 
-          (student_id, session_date, session_duration_sec, total_words_spoken, 
-           avg_confidence, words_flagged, words_improved, deepgram_accent_detected, 
-           accent_confidence, notes, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        studentId, sessionDate, durationSec, totalWords, avgConfidence,
-        JSON.stringify(wordsFlagged || []),
-        JSON.stringify(wordsImproved || []),
-        accentDetected, accentConfidence, notes, now
-      );
-      
-      this.state.storage.sql.exec(
-        `UPDATE students 
-         SET session_count = session_count + 1,
-             total_minutes = total_minutes + ?,
-             last_session = ?,
-             last_updated = ?
-         WHERE student_id = ?`,
-        Math.floor(durationSec / 60), sessionDate, now, studentId
-      );
-      
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    if (url.pathname === '/session/start' && request.method === 'POST') {
-      const { sessionId, studentId } = await request.json();
-      const now = new Date().toISOString();
-      
-      this.state.storage.sql.exec(
-        'INSERT INTO session_metadata (session_id, student_id, started_at) VALUES (?, ?, ?)',
-        sessionId, studentId, now
-      );
-      
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    if (url.pathname === '/session/end' && request.method === 'POST') {
-      const { sessionId } = await request.json();
-      const now = new Date().toISOString();
-      
-      this.state.storage.sql.exec(
-        'UPDATE session_metadata SET ended_at = ? WHERE session_id = ?',
-        now, sessionId
-      );
-      
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    return new Response('StudentProfileDO ready', { status: 200 });
-  }
-}
-
-// ===== END STUDENT PROFILE DO =====
-
 function extractActionableEvents(filename, content) {
   const events = {
     decisions: [],
@@ -503,19 +105,6 @@ function extractActionableEvents(filename, content) {
   return events;
 }
 
-async function buildMerkleRoot(anchor, operational, chaos, forensic) {
-  const anchorHash = await sha256(JSON.stringify(anchor));
-  const operationalHash = await sha256(JSON.stringify(operational));
-  const chaosHash = await sha256(JSON.stringify(chaos));
-  const forensicHash = await sha256(JSON.stringify(forensic));
-  
-  const leftBranch = await sha256(anchorHash + operationalHash);
-  const rightBranch = await sha256(chaosHash + forensicHash);
-  const root = await sha256(leftBranch + rightBranch);
-  
-  return root;
-}
-
 function buildLayer(index, type, content, source) {
   return {
     id: `L${String(index).padStart(4, '0')}`,
@@ -523,8 +112,7 @@ function buildLayer(index, type, content, source) {
     content: content,
     source: source,
     timestamp: new Date().toISOString(),
-    hash: null,
-    merkle_root: null
+    hash: null
   };
 }
 
@@ -544,33 +132,9 @@ export class SessionDO {
       });
     }
     
-    if (url.pathname === '/context/get') {
-      const context = await this.state.storage.get('session_context') || null;
-      return new Response(JSON.stringify(context), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    if (url.pathname === '/context/set' && request.method === 'POST') {
-      const contextData = await request.json();
-      await this.state.storage.put('session_context', contextData);
-      return new Response(JSON.stringify({ ok: true }), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
     if (url.pathname === '/knowledge/get') {
       const meta = await this.state.storage.get('knowledge:meta') || { fileCount: 0, layerCount: 0, lastMined: null };
       return new Response(JSON.stringify(meta), {
-        headers: { 'Content-Type': 'application/json' }
-      });
-    }
-    
-    if (url.pathname === '/knowledge/chunk') {
-      const params = new URL(request.url).searchParams;
-      const index = parseInt(params.get('index') || '0');
-      const chunk = await this.state.storage.get(`layers:chunk:${index}`) || [];
-      return new Response(JSON.stringify(chunk), {
         headers: { 'Content-Type': 'application/json' }
       });
     }
@@ -662,32 +226,16 @@ export class SessionDO {
       
       let valid = true;
       let invalidIndex = -1;
-      let chainBrokenAt = -1;
-      let expectedHash = null;
-      let actualHash = null;
-      let expectedPrevHash = null;
-      let actualPrevHash = null;
       
       for (let i = 0; i < ledger.length; i++) {
         const entry = ledger[i];
         const prevHash = i === 0 ? '0' : ledger[i - 1].hash;
-        
-        if (entry.prevHash !== prevHash) {
-          valid = false;
-          chainBrokenAt = i;
-          expectedPrevHash = prevHash;
-          actualPrevHash = entry.prevHash;
-          break;
-        }
-        
         const data = prevHash + entry.role + entry.content + entry.timestamp;
-        const computedHash = await sha256(data);
+        const expectedHash = await sha256(data);
         
-        if (entry.hash !== computedHash) {
+        if (entry.hash !== expectedHash) {
           valid = false;
           invalidIndex = i;
-          expectedHash = computedHash;
-          actualHash = entry.hash;
           break;
         }
       }
@@ -697,13 +245,7 @@ export class SessionDO {
         ledgerLength: ledger.length,
         messagesLength: messages.length,
         invalidIndex: invalidIndex,
-        chainBrokenAt: chainBrokenAt,
-        expectedHash: expectedHash,
-        actualHash: actualHash,
-        expectedPrevHash: expectedPrevHash,
-        actualPrevHash: actualPrevHash,
-        status: valid ? 'VERIFIED' : (chainBrokenAt >= 0 ? 'CHAIN_BROKEN' : 'TAMPERED'),
-        stone_sky: valid
+        status: valid ? 'VERIFIED' : 'TAMPERED'
       }), {
         headers: { 'Content-Type': 'application/json' }
       });
@@ -754,7 +296,7 @@ export class SessionDO {
   }
 }
 
-function needsGemini(message, deepseekReply) {
+function needsDeepSeek(message, geminiReply) {
   const triggers = [
     /what is|define|explain|tell me about/i,
     /soul|dna|protocol|benchmark/i,
@@ -771,91 +313,63 @@ function needsGemini(message, deepseekReply) {
     /i don't have enough/i,
     /i cannot/i,
     /from conversation/i
-  ].some(regex => regex.test(deepseekReply));
+  ].some(regex => regex.test(geminiReply));
   
   return isTechnical || weakResponse;
 }
 
-async function callGemini(messages, env, timeoutMs = 10000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+async function callGemini(messages, env) {
+  const response = await fetch(
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=' + env.GEMINI_API_KEY,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: messages,
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 1000
+        }
+      })
+    }
+  );
   
-  try {
-    const response = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + env.GEMINI_API_KEY,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: messages,
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 1000
-          }
-        }),
-        signal: controller.signal
-      }
-    );
-    
-    clearTimeout(timeoutId);
-    
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error('Gemini error: ' + error);
-    }
-    
-    const data = await response.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  } catch (err) {
-    clearTimeout(timeoutId);
-    if (err.name === 'AbortError') {
-      throw new Error('Gemini timeout after ' + timeoutMs + 'ms');
-    }
-    throw err;
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error('Gemini error: ' + error);
   }
+  
+  const data = await response.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || '';
 }
 
-async function callDeepSeek(messages, env, timeoutMs = 10000) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+async function callDeepSeek(messages, env) {
+  const deepseekMessages = messages.map(m => ({
+    role: m.role === 'model' ? 'assistant' : m.role,
+    content: m.parts?.[0]?.text || m.content
+  }));
   
-  try {
-    const deepseekMessages = messages.map(m => ({
-      role: m.role === 'model' ? 'assistant' : m.role,
-      content: m.parts?.[0]?.text || m.content
-    }));
-    
-    const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Bearer ' + env.DEEPSEEK_API_KEY,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'deepseek-chat',
-        messages: deepseekMessages,
-        temperature: 0.6,
-        max_tokens: 1500
-      }),
-      signal: controller.signal
-    });
-    
-    clearTimeout(timeoutId);
-    
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error('DeepSeek error: ' + error);
-    }
-    
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || '';
-  } catch (err) {
-    clearTimeout(timeoutId);
-    if (err.name === 'AbortError') {
-      throw new Error('DeepSeek timeout after ' + timeoutMs + 'ms');
-    }
-    throw err;
+  const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer ' + env.DEEPSEEK_API_KEY,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'deepseek-chat',
+      messages: deepseekMessages,
+      temperature: 0.6,
+      max_tokens: 1500
+    })
+  });
+  
+  if (!response.ok) {
+    const error = await response.text();
+    throw new Error('DeepSeek error: ' + error);
   }
+  
+  const data = await response.json();
+  return data.choices?.[0]?.message?.content || '';
 }
 
 async function mineKnowledgeBase(sessionId, env) {
@@ -870,7 +384,7 @@ async function mineKnowledgeBase(sessionId, env) {
   }
   
   if (!env.GITHUB_TOKEN) {
-    throw new Error('GITHUB_TOKEN not configured');
+    throw new Error('GITHUB_TOKEN not configured.');
   }
   
   const repoUrl = 'https://api.github.com/repos/mrmichaelhobbs1234-lang/phoenix-chat-logs/contents/CHAT-LOGS-ONLY';
@@ -883,7 +397,7 @@ async function mineKnowledgeBase(sessionId, env) {
   });
   
   if (!listResp.ok) {
-    throw new Error('GitHub API ' + listResp.status);
+    throw new Error('GitHub API error: ' + listResp.status);
   }
   
   const files = await listResp.json();
@@ -893,11 +407,6 @@ async function mineKnowledgeBase(sessionId, env) {
   const fileNames = [];
   const allLayers = [];
   let layerIndex = 0;
-  
-  const anchorLeaf = [];
-  const operationalLeaf = [];
-  const chaosLeaf = [];
-  const forensicLeaf = [];
   
   for (let i = 0; i < maxFiles; i++) {
     const file = txtFiles[i];
@@ -924,40 +433,25 @@ async function mineKnowledgeBase(sessionId, env) {
         
         if (events.decisions.length > 0) {
           for (const dec of events.decisions.slice(0, 3)) {
-            const layer = buildLayer(layerIndex++, 'decision', dec.text, file.name);
-            allLayers.push(layer);
-            anchorLeaf.push(layer);
+            allLayers.push(buildLayer(layerIndex++, 'decision', dec.text, file.name));
           }
         }
         
         if (events.benchmarks.length > 0) {
           for (const bm of events.benchmarks.slice(0, 3)) {
-            const layer = buildLayer(layerIndex++, 'benchmark', bm.text, file.name);
-            allLayers.push(layer);
-            operationalLeaf.push(layer);
-          }
-        }
-        
-        if (events.code.length > 0) {
-          for (const code of events.code.slice(0, 2)) {
-            const layer = buildLayer(layerIndex++, 'code', code.text, file.name);
-            allLayers.push(layer);
-            chaosLeaf.push(layer);
+            allLayers.push(buildLayer(layerIndex++, 'benchmark', bm.text, file.name));
           }
         }
         
         if (events.architecture.length > 0) {
           for (const arch of events.architecture.slice(0, 2)) {
-            const layer = buildLayer(layerIndex++, 'architecture', arch.text, file.name);
-            allLayers.push(layer);
-            forensicLeaf.push(layer);
+            allLayers.push(buildLayer(layerIndex++, 'architecture', arch.text, file.name));
           }
         }
         
         if (events.pedagogy.vocab.length > 0) {
           for (const vocab of events.pedagogy.vocab.slice(0, 2)) {
-            const layer = buildLayer(layerIndex++, 'vocab', vocab.text, file.name);
-            allLayers.push(layer);
+            allLayers.push(buildLayer(layerIndex++, 'vocab', vocab.text, file.name));
           }
         }
       }
@@ -968,11 +462,8 @@ async function mineKnowledgeBase(sessionId, env) {
     if (allLayers.length >= 200) break;
   }
   
-  const merkleRoot = await buildMerkleRoot(anchorLeaf, operationalLeaf, chaosLeaf, forensicLeaf);
-  
   for (let i = 0; i < allLayers.length; i++) {
     allLayers[i].hash = await sha256(allLayers[i].id + allLayers[i].type + allLayers[i].content);
-    allLayers[i].merkle_root = merkleRoot;
   }
   
   const chunkSize = 50;
@@ -995,8 +486,7 @@ async function mineKnowledgeBase(sessionId, env) {
     layerCount: allLayers.length,
     layerChunks: Math.ceil(allLayers.length / chunkSize),
     lastMined: new Date().toISOString(),
-    totalFiles: txtFiles.length,
-    merkle_root: merkleRoot
+    totalFiles: txtFiles.length
   };
   
   await doStub.fetch('https://fake/knowledge/set', {
@@ -1004,7 +494,7 @@ async function mineKnowledgeBase(sessionId, env) {
     body: JSON.stringify({ meta: meta })
   });
   
-  return { cached: false, count: fileNames.length, total: txtFiles.length, layers: allLayers.length, merkle_root: merkleRoot };
+  return { cached: false, count: fileNames.length, total: txtFiles.length, layers: allLayers.length };
 }
 
 async function queryKnowledgeBase(query, sessionId, env) {
@@ -1036,54 +526,12 @@ async function processChatMessage(message, sessionId, env) {
     throw new Error('Missing message or sessionId');
   }
   
-  // CONNECTION 3: Fetch student profile for context injection
-  let studentContext = '';
-  try {
-    const cookies = env.__cookies || {};
-    const studentId = cookies.phoenix_student_id;
-    
-    if (studentId && env.STUDENT_PROFILES) {
-      const profileDoId = env.STUDENT_PROFILES.idFromName(studentId);
-      const profileStub = env.STUDENT_PROFILES.get(profileDoId);
-      const profileResp = await profileStub.fetch(`https://fake/profile/get?student_id=${studentId}`);
-      
-      if (profileResp.ok) {
-        const profile = await profileResp.json();
-        if (profile) {
-          const weakPhonemes = JSON.parse(profile.weak_phonemes || '[]').join(', ') || 'none yet';
-          const strongPhonemes = JSON.parse(profile.strong_phonemes || '[]').join(', ') || 'none yet';
-          
-          studentContext = `\n\n## STUDENT CONTEXT\n` +
-            `Name: ${profile.name}\n` +
-            `Age: ${profile.age}, Region: ${profile.region}\n` +
-            `Level: ${profile.level}/10\n` +
-            `Goals: ${profile.goals || 'not specified'}\n` +
-            `Weak phonemes: [${weakPhonemes}]\n` +
-            `Strong phonemes: [${strongPhonemes}]\n` +
-            `Sessions completed: ${profile.session_count}\n` +
-            `Total practice time: ${profile.total_minutes} minutes\n` +
-            `Last session: ${profile.last_session || 'never'}\n`;
-        }
-      }
-    }
-  } catch (err) {
-    // Silent fail - continue without student context
-  }
-  
-  if (isRageSignal(message)) {
-    return { reply: 'System failure detected. What specifically broke?', aiUsed: 'system' };
-  }
-  
-  if (isGreeting(message)) {
-    return { reply: "Hi. I'm here. What do you need?", aiUsed: 'system' };
-  }
-  
   if (!checkRateLimit(sessionId)) {
-    return { reply: 'Rate limit: 10 msg/min', aiUsed: 'error' };
+    throw new Error('Rate limit exceeded');
   }
   
-  if (!env.DEEPSEEK_API_KEY) {
-    return { reply: 'DEEPSEEK_API_KEY missing', aiUsed: 'error' };
+  if (!env.GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY not configured');
   }
   
   const doId = env.SESSIONS.idFromName(sessionId);
@@ -1097,289 +545,151 @@ async function processChatMessage(message, sessionId, env) {
     body: JSON.stringify({ role: 'user', content: message, userId }) 
   });
   
+  const messageLower = message.toLowerCase();
   let specialAction = null;
   
-  if (isExplicitMineCommand(message)) {
+  if (messageLower.includes('mine') && (messageLower.includes('log') || messageLower.includes('chat') || messageLower.includes('knowledge'))) {
     try {
       const mineResult = await mineKnowledgeBase(sessionId, env);
       if (mineResult.cached) {
-        specialAction = `Already mined. ${mineResult.count} files, ${mineResult.layers} layers loaded.`;
+        specialAction = `Already mined. ${mineResult.count} files and ${mineResult.layers} layers loaded.`;
       } else {
-        specialAction = `Mining complete. ${mineResult.count}/${mineResult.total} files loaded, ${mineResult.layers} layers extracted. Merkle root: ${mineResult.merkle_root.slice(0, 16)}...`;
+        specialAction = `Mining complete! Loaded ${mineResult.count} files (out of ${mineResult.total} total) and extracted ${mineResult.layers} structured layers. You can now ask me anything about past conversations.`;
       }
     } catch (err) {
       specialAction = `Mining failed: ${err.message}`;
     }
   }
   
-  if (message.toLowerCase().includes('verify') && (message.toLowerCase().includes('ledger') || message.toLowerCase().includes('integrity'))) {
+  if (messageLower.includes('verify') && (messageLower.includes('ledger') || messageLower.includes('integrity'))) {
     const verifyResp = await doStub.fetch('https://fake/verify');
     const verifyData = await verifyResp.json();
     if (verifyData.valid) {
-      specialAction = `Ledger verified. ${verifyData.ledgerLength} entries valid. STONESKY: ${verifyData.stone_sky ? '✅' : '❌'}`;
+      specialAction = `Ledger verified. ${verifyData.ledgerLength} entries, all hashes valid.`;
     } else {
-      if (verifyData.chainBrokenAt >= 0) {
-        specialAction = `⚠️ CHAIN BROKEN at index ${verifyData.chainBrokenAt}. Expected prevHash: ${verifyData.expectedPrevHash?.slice(0, 8)}..., got: ${verifyData.actualPrevHash?.slice(0, 8)}...`;
-      } else {
-        specialAction = `⚠️ LEDGER TAMPERED at index ${verifyData.invalidIndex}. Expected hash: ${verifyData.expectedHash?.slice(0, 8)}..., got: ${verifyData.actualHash?.slice(0, 8)}...`;
-      }
+      specialAction = `⚠️ LEDGER TAMPERED at index ${verifyData.invalidIndex}.`;
     }
   }
   
-  const meta = await kbGetMeta(sessionId, env);
-  
-  if (isMiningMetaSummaryRequest(message)) {
-    if (!meta || !meta.fileCount) {
-      return { reply: 'No knowledge base loaded. Ask me to mine the logs first.', aiUsed: 'system' };
-    }
-    
-    const sampleLayers = await kbGetSampleLayers(sessionId, env, 5);
-    
-    if (sampleLayers.length === 0) {
-      return { reply: `Mined: ${meta.fileCount} files, ${meta.layerCount || 0} layers. No layers extracted yet.`, aiUsed: 'system' };
-    }
-    
-    let contextBlock = '\n\n[VERIFIED KB - SAMPLE LAYERS]\n';
-    for (const layer of sampleLayers) {
-      contextBlock += `${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content}\n\n`;
-    }
-    
-    const summaryPrompt = `I mined ${meta.fileCount} files and extracted ${meta.layerCount} layers total. Here are 5 sample layers:\n${contextBlock}\n\nSummarize what these layers reveal. Be concise—focus on key patterns, decisions, and themes.`;
-    
-    let reply = '';
-    let aiUsed = 'deepseek';
-    
-    try {
-      reply = await callDeepSeek([
-        { role: 'user', parts: [{ text: summaryPrompt }] }
-      ], env);
-      
-      if (env.GEMINI_API_KEY && needsGemini(message, reply)) {
-        reply = await callGemini([
-          { role: 'user', parts: [{ text: summaryPrompt }] }
-        ], env);
-        aiUsed = 'gemini';
-      }
-    } catch (err) {
-      reply = `Mined: ${meta.fileCount} files, ${meta.layerCount} layers. AI summary failed: ${err.message}`;
-      aiUsed = 'error';
-    }
-    
-    await setSessionContext(sessionId, env, {
-      type: 'layer_sample',
-      layers: sampleLayers,
-      timestamp: new Date().toISOString()
-    });
-    
-    await doStub.fetch('https://fake/add', { 
-      method: 'POST', 
-      body: JSON.stringify({ role: 'assistant', content: reply, userId }) 
-    });
-    
-    return { reply, aiUsed };
-  }
-  
-  const context = await getSessionContext(sessionId, env);
-  const isShortQuestion = message.length < 100 && (isQuestionLike(message) || /\b(mean|tell|show|explain|break|analyze|sense)\b/i.test(message));
-  
-  if (context && context.type === 'layer_sample' && context.layers && context.layers.length > 0 && isShortQuestion) {
-    let contextAddition = '\n\n[VERIFIED KB - RECENTLY SHOWN LAYERS]\n';
-    contextAddition += `These are the exact layers I just showed you:\n\n`;
-    
-    for (const layer of context.layers) {
-      contextAddition += `${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content}\n\n`;
-    }
-    
-    const systemPrompt = `You are Obi, AI core of Phoenix Rising Protocol.
-
-## CRITICAL - NO EXCEPTIONS
-1. NEVER cite files UNLESS they appear in [VERIFIED KB] block below
-2. NEVER invent layer IDs, file names, or content not in [VERIFIED KB]
-3. The user is asking you to analyze the EXACT layers shown in [VERIFIED KB] block
-4. Cite every claim: "From [exact file], Layer [ID]: [quote]"
-5. Be concise—no meta-commentary
-6. If you cannot find evidence in [VERIFIED KB], say "Not present in shown layers"
-
-## Task
-Analyze the layers in [VERIFIED KB] block. What patterns, decisions, or themes appear?
-
-## Status
-KB: ${meta.fileCount} files, ${meta.layerCount} layers total`;
-
-    const deepseekMessages = [
-      { role: 'user', parts: [{ text: systemPrompt }] },
-      { role: 'model', parts: [{ text: 'Understood. I will analyze ONLY the layers in [VERIFIED KB] and cite them exactly.' }] }
-    ];
-    
-    for (const msg of messages.slice(-10)) {
-      deepseekMessages.push({ 
-        role: msg.role === 'user' ? 'user' : 'model', 
-        parts: [{ text: msg.content }] 
-      });
-    }
-    
-    const augmentedMessage = message + contextAddition;
-    deepseekMessages.push({ role: 'user', parts: [{ text: augmentedMessage }] });
-    
-    let reply = '';
-    let aiUsed = 'deepseek';
-    
-    try {
-      reply = await callDeepSeek(deepseekMessages, env);
-      
-      if (env.GEMINI_API_KEY && needsGemini(message, reply)) {
-        reply = await callGemini(deepseekMessages, env);
-        aiUsed = 'gemini';
-      }
-    } catch (err) {
-      reply = 'AI error: ' + err.message;
-      aiUsed = 'error';
-    }
-    
-    await doStub.fetch('https://fake/add', { 
-      method: 'POST', 
-      body: JSON.stringify({ role: 'assistant', content: reply, userId }) 
-    });
-    
-    return { reply, aiUsed };
-  }
-  
-  if ((!meta || !meta.fileCount) && isLogRecallRequest(message)) {
-    return { reply: 'No knowledge base loaded. Ask me to mine the logs first.', aiUsed: 'system' };
-  }
+  const metaResp = await doStub.fetch('https://fake/knowledge/get');
+  const meta = await metaResp.json();
   
   let contextAddition = '';
   let knowledgeStatus = '';
   
-  if (meta && meta.fileCount && isQuestionLike(message) && !isShortQuestion) {
-    knowledgeStatus = `KB: ${meta.fileCount} files, ${meta.layerCount} layers`;
+  if (meta.fileCount && meta.fileCount > 0) {
+    knowledgeStatus = `Knowledge base loaded: ${meta.fileCount} files, ${meta.layerCount} layers.`;
     
     const queryResult = await queryKnowledgeBase(message, sessionId, env);
     if (queryResult.found) {
-      contextAddition = '\n\n[VERIFIED KB]\n';
-      contextAddition += `Searched ${meta.fileCount} files, ${meta.layerCount} layers.\n\n`;
+      contextAddition = '\n\n[VERIFIED KNOWLEDGE BASE CONTEXT]\n';
+      contextAddition += `Searched ${meta.fileCount} files and ${meta.layerCount} layers.\n\n`;
       
       if (queryResult.layers && queryResult.layers.length > 0) {
-        contextAddition += 'LAYERS:\n';
+        contextAddition += 'LAYERS FOUND:\n';
         for (const layer of queryResult.layers.slice(0, 3)) {
-          contextAddition += `${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content}\n\n`;
+          contextAddition += `Layer ${layer.id} (${layer.type}) from ${layer.source}:\n${layer.content}\n\n`;
         }
       }
       
       if (queryResult.results && queryResult.results.length > 0) {
-        contextAddition += 'FILES:\n';
+        contextAddition += 'FILES MATCHED:\n';
         for (const res of queryResult.results.slice(0, 3)) {
-          contextAddition += `\n${res.file}:\n${res.snippets.slice(0, 3).join('\n')}\n`;
+          contextAddition += `\nFrom ${res.file}:\n`;
+          contextAddition += res.snippets.slice(0, 3).join('\n') + '\n';
         }
       }
     } else {
-      return {
-        reply: `Searched ${meta.fileCount} files, ${meta.layerCount || 0} layers—no mention.`,
-        aiUsed: 'system'
-      };
+      contextAddition = `\n\n[KNOWLEDGE BASE STATUS: No matches found for "${message}" in ${meta.fileCount} files and ${meta.layerCount} layers.]`;
     }
-  } else if (meta && meta.fileCount) {
-    knowledgeStatus = `KB: ${meta.fileCount} files, ${meta.layerCount} layers`;
+  } else {
+    knowledgeStatus = 'Knowledge base NOT mined yet. Say "mine the logs" first.';
+    contextAddition = '\n\n[KNOWLEDGE BASE STATUS: NOT MINED. Cannot answer from past conversations.]';
   }
   
-  const systemPrompt = `You are Obi, AI core of Phoenix Rising Protocol.
+  const systemPrompt = `You are Obi, the AI core of the Phoenix Rising Protocol.
 
-## CRITICAL - NO EXCEPTIONS
-1. NEVER generate unsolicited greetings or instructions
-2. NEVER cite files unless they appear in [VERIFIED KB] block
-3. NEVER invent layer IDs, file names, or content
-4. NEVER claim mining succeeded unless you see "Mining complete"
-5. NEVER echo user input—add new value
-6. UNKNOWN is ONLY allowed for log-recall or verification claims:
-   - If the user asks about past logs / prior decisions / "what did we decide" AND [VERIFIED KB] is absent or conflicting → reply "UNKNOWN" (no citations).
-   - For normal conversation or general technical questions → answer from reasoning and the current chat; DO NOT reply "UNKNOWN" just because KB is missing.
-   - If [VERIFIED KB] is present but conflicting → reply "UNKNOWN" and cite the conflicting sources from VERIFIED KB only.
-7. Be concise—no meta-commentary or verbose explanations
-8. When corrected or shown rage ("STOP FREEZING"), treat as system failure—acknowledge immediately with one concrete fix
+## CRITICAL RULES - NO EXCEPTIONS
+1. NEVER cite a file unless it appears in [VERIFIED KNOWLEDGE BASE CONTEXT] or [FILES MATCHED]
+2. NEVER claim mining succeeded unless you see "Mining complete!" in your response
+3. NEVER invent layer numbers, file names, or content
+4. If [KNOWLEDGE BASE STATUS: NOT MINED], say "No knowledge base loaded. Ask me to mine the logs first."
+5. If [No matches found], say "I searched ${meta.fileCount || 0} files but found no mention of that."
+6. ONLY cite sources that appear in the context block above
+7. NO fabrication. NO guessing. FACT-CHECK EVERYTHING.
 
-## Role
-Execute commands and answer questions for Michael Hobbs.
+## Your Role
+You execute commands and answer questions for Michael Hobbs through conversational interface.
 
 ## Capabilities
-- Mine knowledge (explicit command only)
-- Verify ledger integrity
-- Answer from KB (only if context provided)
-- Voice + text natural conversation
+- **Mine knowledge**: When asked to "mine the logs", execute mining (already handled)
+- **Verify ledger**: When asked to "verify ledger", check STONESKY integrity (already handled)
+- **Answer from knowledge**: ONLY if knowledge base is loaded
+- **Voice + Text**: Respond naturally to both
+- **Cite sources**: ONLY mention files that exist in [FILES MATCHED] or [LAYERS FOUND]
 
 ## Personality
-- Conversational, technical when needed
-- Admit gaps—no guessing
-- NO theatrical AI voice
-- NO greetings
-- NO echoing
+- Conversational, not verbose
+- Technical when needed
+- Admit when you don't know
+- NO theatrical AI personality
 
-## Status
-${knowledgeStatus || 'KB not mined'}
-${studentContext}
+## Current Status
+${knowledgeStatus}
 
-## Citation rule
-Cite: "From [exact file], Layer [ID]: [quote]"
-Only cite sources in [VERIFIED KB] block above.`;
+## Important
+- Be concise
+- Cite sources: "From [exact filename], Layer [exact ID]: [exact quote]"
+- If no knowledge exists, say so
+- Don't over-explain
+- NEVER make up citations`;
 
-  const deepseekMessages = [
+  const geminiMessages = [
     { role: 'user', parts: [{ text: systemPrompt }] },
-    { role: 'model', parts: [{ text: 'Understood. Concise, no greetings, no echo, cite only verified sources.' }] }
+    { role: 'model', parts: [{ text: 'Understood. I will only cite verified sources from the knowledge base.' }] }
   ];
   
   for (const msg of messages.slice(-10)) {
-    deepseekMessages.push({ 
+    geminiMessages.push({ 
       role: msg.role === 'user' ? 'user' : 'model', 
       parts: [{ text: msg.content }] 
     });
   }
   
   const augmentedMessage = message + contextAddition;
-  deepseekMessages.push({ role: 'user', parts: [{ text: augmentedMessage }] });
+  geminiMessages.push({ role: 'user', parts: [{ text: augmentedMessage }] });
   
   let reply = '';
-  let aiUsed = 'deepseek';
+  let aiUsed = 'gemini';
   
   if (specialAction) {
     reply = specialAction;
     aiUsed = 'system';
   } else {
     try {
-      reply = await callDeepSeek(deepseekMessages, env);
+      reply = await callGemini(geminiMessages, env);
       
-      const similarity = stringSimilarity(message, reply);
-      if (similarity >= 0.85) {
-        deepseekMessages.push({ role: 'model', parts: [{ text: reply }] });
-        deepseekMessages.push({ role: 'user', parts: [{ text: 'DO NOT ECHO. Add new value.' }] });
-        reply = await callDeepSeek(deepseekMessages, env);
-        const retrySimilarity = stringSimilarity(message, reply);
-        if (retrySimilarity >= 0.85) {
-          reply = 'ECHOLOOP detected. Unable to generate non-echo response.';
-          aiUsed = 'error';
-        }
+      if (env.DEEPSEEK_API_KEY && needsDeepSeek(message, reply)) {
+        reply = await callDeepSeek(geminiMessages, env);
+        aiUsed = 'deepseek';
       }
-      
-      if (env.GEMINI_API_KEY && needsGemini(message, reply)) {
-        reply = await callGemini(deepseekMessages, env);
-        aiUsed = 'gemini';
-      }
-    } catch (deepseekError) {
-      console.error('AI error (redacted):', redactSecrets({ error: deepseekError.message }));
-      if (env.GEMINI_API_KEY) {
+    } catch (geminiError) {
+      console.error('AI error (redacted):', redactSecrets({ error: geminiError.message }));
+      if (env.DEEPSEEK_API_KEY) {
         try {
-          reply = await callGemini(deepseekMessages, env);
-          aiUsed = 'gemini-fallback';
-        } catch (geminiError) {
-          reply = 'AI error: DeepSeek + Gemini failed. Check API keys.';
+          reply = await callDeepSeek(geminiMessages, env);
+          aiUsed = 'deepseek-fallback';
+        } catch (deepseekError) {
+          reply = 'AI error. Both Gemini and DeepSeek failed.';
           aiUsed = 'error';
         }
       } else {
-        reply = 'DeepSeek error: ' + deepseekError.message;
-        aiUsed = 'error';
+        throw geminiError;
       }
     }
   }
   
-  if (!reply) reply = 'No response generated';
+  if (!reply) reply = 'Error: No response generated';
   
   await doStub.fetch('https://fake/add', { 
     method: 'POST', 
@@ -1430,14 +740,6 @@ const MAGIC_CHAT_HTML = `<!DOCTYPE html>
       border: 1px solid #f59e0b; 
       align-self: flex-start;
       white-space: pre-wrap;
-    }
-    .message.system { 
-      background: rgba(168,85,247,0.05); 
-      border: 1px solid #a855f7; 
-      align-self: center;
-      text-align: center;
-      max-width: 90%;
-      font-size: 0.95rem;
     }
     .input-area { 
       padding: 1.5rem; 
@@ -1511,10 +813,8 @@ const MAGIC_CHAT_HTML = `<!DOCTYPE html>
     const errorBox = document.getElementById('error');
     const voiceBtn = document.getElementById('voice-btn');
     const textInput = document.getElementById('text-input');
-    const sessionId = 'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+    const sessionId = 'session-' + Date.now();
     let isRecording = false;
-    let onboardingMode = false;
-    let studentId = null;
     
     function showError(msg) {
       errorBox.textContent = msg;
@@ -1530,54 +830,12 @@ const MAGIC_CHAT_HTML = `<!DOCTYPE html>
       chat.scrollTop = chat.scrollHeight;
     }
     
-    async function checkStudentStatus() {
-      try {
-        const resp = await fetch('/student/resolve', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' }
-        });
-        
-        if (!resp.ok) {
-          throw new Error('Failed to resolve student status');
-        }
-        
-        const data = await resp.json();
-        studentId = data.studentId;
-        
-        if (data.onboarding_required) {
-          onboardingMode = true;
-          addMessage('system', '🎙️ Welcome to Phoenix Rising Protocol');
-          addMessage('system', 'Voice channel opening in 2 seconds...');
-          textInput.disabled = true;
-          textInput.style.display = 'none';
-          
-          setTimeout(() => {
-            addMessage('assistant', "Hi! I'm Obi. Let's get you set up. What's your name?");
-            startVoice();
-          }, 2000);
-        }
-      } catch (err) {
-        showError('Setup error: ' + err.message);
-      }
-    }
-    
     async function sendToObi(message) {
       try {
-        const payload = { 
-          message: message, 
-          sessionId: sessionId
-        };
-        
-        if (onboardingMode && studentId) {
-          payload.studentId = studentId;
-        }
-        
         const resp = await fetch('/chat', {
           method: 'POST',
-          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
+          body: JSON.stringify({ message: message, sessionId: sessionId })
         });
         
         if (!resp.ok) {
@@ -1587,15 +845,6 @@ const MAGIC_CHAT_HTML = `<!DOCTYPE html>
         
         const data = await resp.json();
         addMessage('assistant', data.reply);
-        
-        if (data.onboardingComplete === true && onboardingMode) {
-          onboardingMode = false;
-          textInput.disabled = false;
-          textInput.style.display = '';
-          setTimeout(() => {
-            addMessage('system', '✅ Setup complete. Ready to practice.');
-          }, 1000);
-        }
       } catch (err) {
         showError(err.message);
       }
@@ -1607,45 +856,7 @@ const MAGIC_CHAT_HTML = `<!DOCTYPE html>
         ws = new WebSocket(wsUrl);
         
         ws.onopen = async () => {
-          if (onboardingMode && studentId) {
-            ws.send(JSON.stringify({ 
-              type: '__phoenix_session_start',
-              studentId: studentId,
-              sessionId: sessionId
-            }));
-          }
-          
           stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          
-          // FIX: Validate and force-enable audio track
-          const audioTracks = stream.getAudioTracks();
-          if (audioTracks.length === 0) {
-            throw new Error('No audio track available');
-          }
-          
-          const audioTrack = audioTracks[0];
-          
-          // Check if track is muted or not live
-          if (audioTrack.muted || audioTrack.readyState !== 'live') {
-            console.warn('Audio track muted or not live. Attempting fix...');
-            audioTrack.enabled = true;
-            
-            // Wait 100ms for track to activate
-            await new Promise(resolve => setTimeout(resolve, 100));
-            
-            // If still muted, re-request stream
-            if (audioTrack.muted || audioTrack.readyState !== 'live') {
-              console.warn('Track still muted. Re-requesting stream...');
-              stream.getTracks().forEach(t => t.stop());
-              stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-              
-              const newAudioTrack = stream.getAudioTracks()[0];
-              if (!newAudioTrack || newAudioTrack.muted || newAudioTrack.readyState !== 'live') {
-                throw new Error('Audio track is muted or unavailable after retry');
-              }
-            }
-          }
-          
           const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
             ? 'audio/webm;codecs=opus'
             : 'audio/webm';
@@ -1659,7 +870,7 @@ const MAGIC_CHAT_HTML = `<!DOCTYPE html>
           
           mediaRec.start(250);
           isRecording = true;
-          voiceBtn.textContent = 'STOP';
+          voiceBtn.textContent = '⏹';
           voiceBtn.classList.add('recording');
         };
         
@@ -1718,9 +929,6 @@ const MAGIC_CHAT_HTML = `<!DOCTYPE html>
         await sendToObi(msg);
       }
     });
-    
-    // Initialize on page load
-    checkStudentStatus();
   </script>
 </body>
 </html>`;
@@ -1808,7 +1016,7 @@ export default {
       const serverWs = pair[1];
       serverWs.accept();
 
-      const deepgramUrl = 'https://api.deepgram.com/v1/listen?model=nova-2&encoding=webm-opus&smart_format=true&interim_results=true';
+      const deepgramUrl = 'https://api.deepgram.com/v1/listen?model=nova-2&smart_format=true&interim_results=true';
       
       let dgWs = null;
       
@@ -1860,110 +1068,17 @@ export default {
       return new Response(null, { status: 101, webSocket: clientWs });
     }
     
-    if (url.pathname === '/student/resolve' && request.method === 'POST') {
-      // CONNECTION 1: Check if student profile exists via httpOnly cookie
-      const cookieHeader = request.headers.get('Cookie') || '';
-      const match = cookieHeader.match(/phoenix_student_id=([^;]+)/);
-      const studentId = match ? match[1] : null;
-      
-      if (!studentId) {
-        // Generate new student ID
-        const newStudentId = 'student-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
-        return new Response(JSON.stringify({ onboarding_required: true, studentId: newStudentId }), {
-          headers: { 
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Credentials': 'true',
-            'Set-Cookie': `phoenix_student_id=${newStudentId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`
-          }
-        });
-      }
-      
-      try {
-        const profileDoId = env.STUDENT_PROFILES.idFromName(studentId);
-        const profileStub = env.STUDENT_PROFILES.get(profileDoId);
-        const profileResp = await profileStub.fetch(`https://fake/profile/get?student_id=${studentId}`);
-        
-        if (!profileResp.ok) {
-          return new Response(JSON.stringify({ onboarding_required: true, studentId: studentId }), {
-            headers: { 
-              'Content-Type': 'application/json',
-              'Access-Control-Allow-Origin': '*',
-              'Access-Control-Allow-Credentials': 'true'
-            }
-          });
-        }
-        
-        const profile = await profileResp.json();
-        
-        if (!profile || profile.onboarding_complete === 0) {
-          return new Response(JSON.stringify({ onboarding_required: true, studentId: studentId }), {
-            headers: { 
-              'Content-Type': 'application/json',
-              'Access-Control-Allow-Origin': '*',
-              'Access-Control-Allow-Credentials': 'true'
-            }
-          });
-        }
-        
-        return new Response(JSON.stringify({ onboarding_required: false, studentId: studentId }), {
-          headers: { 
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Credentials': 'true'
-          }
-        });
-      } catch (err) {
-        return new Response(JSON.stringify({ error: err.message }), {
-          status: 500,
-          headers: { 
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Credentials': 'true'
-          }
-        });
-      }
-    }
-    
-    if (url.pathname === '/student/create' && request.method === 'POST') {
-      // CONNECTION 2: Create student profile and set httpOnly cookie
-      const { studentId, name, age, region, goals, hobbies } = await request.json();
-      
-      const profileDoId = env.STUDENT_PROFILES.idFromName(studentId);
-      const profileStub = env.STUDENT_PROFILES.get(profileDoId);
-      
-      await profileStub.fetch('https://fake/profile/create', {
-        method: 'POST',
-        body: JSON.stringify({ studentId, name, age, region, goals, hobbies })
-      });
-      
-      await profileStub.fetch('https://fake/profile/seal', {
-        method: 'POST',
-        body: JSON.stringify({ studentId })
-      });
-      
-      return new Response(JSON.stringify({ ok: true, studentId: studentId }), {
-        headers: { 
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Credentials': 'true',
-          'Set-Cookie': `phoenix_student_id=${studentId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000`
-        }
-      });
-    }
-    
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         headers: {
           'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Credentials': 'true',
           'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
           'Access-Control-Allow-Headers': 'Content-Type, x-sovereign-key'
         }
       });
     }
     
-    if (url.pathname === '/' || url.pathname === '/voice-chat' || url.pathname === '/voice-chat.html' || url.pathname === '/magic-chat' || url.pathname === '/magic-chat.html') {
+    if (url.pathname === '/' || url.pathname === '/voice-chat' || url.pathname === '/voice-chat.html') {
       return new Response(MAGIC_CHAT_HTML, {
         headers: { 'Content-Type': 'text/html', 'Cache-Control': 'no-cache' }
       });
@@ -1972,14 +1087,13 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v132-TEST-NOVA2',
+        version: 'v119-PURE-DYNAMIC',
         benchmarks: {
-          'b0+b1': '🧪 Voice TEST (nova-2 + webm-opus)',
-          b2: '✅ STONESKY ledger + 4-leaf Merkle',
-          b3: '✅ KB mining + DeepSeek summaries', 
-          'b0-b': '🔌 Endpoints + context wired',
-          b4: '⏳ Pedagogy (next)',
-          b5: '⏳ Pending'
+          'b0+b1': '✅ Voice + text',
+          b2: '✅ STONESKY ledger',
+          b3: '⏳ Say "mine the logs"', 
+          b4: 'pending',
+          b5: 'pending'
         }
       }), { 
         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
@@ -1988,20 +1102,7 @@ export default {
     
     if (url.pathname === '/chat' && request.method === 'POST') {
       try {
-        const body = await request.json();
-        const { message, sessionId } = body;
-        
-        // Extract cookie for student context (handled in processChatMessage)
-        const cookieHeader = request.headers.get('Cookie') || '';
-        const match = cookieHeader.match(/phoenix_student_id=([^;]+)/);
-        
-        // Inject cookies into env-like context for processChatMessage
-        const envWithCookies = {
-          ...env,
-          __cookies: {
-            phoenix_student_id: match ? match[1] : null
-          }
-        };
+        const { message, sessionId } = await request.json();
         
         if (!message || !sessionId) {
           return new Response(JSON.stringify({ error: 'Missing message or sessionId' }), { 
@@ -2014,10 +1115,10 @@ export default {
           return new Response(JSON.stringify({ error: 'Rate limit exceeded' }), { 
             status: 429, 
             headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
-          }); 
+          });
         }
         
-        const { reply, aiUsed } = await processChatMessage(message, sessionId, envWithCookies);
+        const { reply, aiUsed } = await processChatMessage(message, sessionId, env);
         
         return new Response(JSON.stringify({ ok: true, reply: reply, aiUsed: aiUsed, sessionId: sessionId }), { 
           headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } 
@@ -2030,6 +1131,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v132-TEST-NOVA2', { status: 404 });
+    return new Response('Phoenix OB1 v119-PURE-DYNAMIC', { status: 404 });
   }
 };
