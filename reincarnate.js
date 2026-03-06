@@ -1,11 +1,11 @@
-// reincarnate.js - Phoenix OB1 System v129-B3-SMART-SUMMARY
+// reincarnate.js - Phoenix OB1 System v130-B2-STONESKY-COMPLETE
 // B0+B1: Voice → Deepgram → Magic Chat → Obi response (INTEGRATED)
-// B2: STONESKY Merkle ledger verification (LIVE)
+// B2: STONESKY Merkle ledger verification + 4-leaf lattice (COMPLETE)
 // B3: Knowledge base mining with Gemini-powered summaries (FIXED)
 // Gospel 444: #0f0f1a (void), #a855f7 (soul), #f59e0b (gold) - NO BLUE
 // Fail-closed. Reality-C. Agent 99.
-// DEPLOY: 2026-03-04T09:51:00Z
-// SEALED: Gemini sees and summarizes extracted layers
+// DEPLOY: 2026-03-06T09:23:00Z
+// SEALED: B2 prevHash enforcement + 4-leaf Merkle root
 
 const rateLimits = new Map();
 
@@ -242,6 +242,19 @@ function extractActionableEvents(filename, content) {
   return events;
 }
 
+async function buildMerkleRoot(anchor, operational, chaos, forensic) {
+  const anchorHash = await sha256(JSON.stringify(anchor));
+  const operationalHash = await sha256(JSON.stringify(operational));
+  const chaosHash = await sha256(JSON.stringify(chaos));
+  const forensicHash = await sha256(JSON.stringify(forensic));
+  
+  const leftBranch = await sha256(anchorHash + operationalHash);
+  const rightBranch = await sha256(chaosHash + forensicHash);
+  const root = await sha256(leftBranch + rightBranch);
+  
+  return root;
+}
+
 function buildLayer(index, type, content, source) {
   return {
     id: `L${String(index).padStart(4, '0')}`,
@@ -249,7 +262,8 @@ function buildLayer(index, type, content, source) {
     content: content,
     source: source,
     timestamp: new Date().toISOString(),
-    hash: null
+    hash: null,
+    merkle_root: null
   };
 }
 
@@ -387,16 +401,33 @@ export class SessionDO {
       
       let valid = true;
       let invalidIndex = -1;
+      let chainBrokenAt = -1;
+      let expectedHash = null;
+      let actualHash = null;
+      let expectedPrevHash = null;
+      let actualPrevHash = null;
       
       for (let i = 0; i < ledger.length; i++) {
         const entry = ledger[i];
         const prevHash = i === 0 ? '0' : ledger[i - 1].hash;
-        const data = prevHash + entry.role + entry.content + entry.timestamp;
-        const expectedHash = await sha256(data);
         
-        if (entry.hash !== expectedHash) {
+        // FIX 1: prevHash enforcement
+        if (entry.prevHash !== prevHash) {
+          valid = false;
+          chainBrokenAt = i;
+          expectedPrevHash = prevHash;
+          actualPrevHash = entry.prevHash;
+          break;
+        }
+        
+        const data = prevHash + entry.role + entry.content + entry.timestamp;
+        const computedHash = await sha256(data);
+        
+        if (entry.hash !== computedHash) {
           valid = false;
           invalidIndex = i;
+          expectedHash = computedHash;
+          actualHash = entry.hash;
           break;
         }
       }
@@ -406,7 +437,13 @@ export class SessionDO {
         ledgerLength: ledger.length,
         messagesLength: messages.length,
         invalidIndex: invalidIndex,
-        status: valid ? 'VERIFIED' : 'TAMPERED'
+        chainBrokenAt: chainBrokenAt,
+        expectedHash: expectedHash,
+        actualHash: actualHash,
+        expectedPrevHash: expectedPrevHash,
+        actualPrevHash: actualPrevHash,
+        status: valid ? 'VERIFIED' : (chainBrokenAt >= 0 ? 'CHAIN_BROKEN' : 'TAMPERED'),
+        stone_sky: valid
       }), {
         headers: { 'Content-Type': 'application/json' }
       });
@@ -597,6 +634,12 @@ async function mineKnowledgeBase(sessionId, env) {
   const allLayers = [];
   let layerIndex = 0;
   
+  // FIX 2: Collect 4-leaf data
+  const anchorLeaf = [];
+  const operationalLeaf = [];
+  const chaosLeaf = [];
+  const forensicLeaf = [];
+  
   for (let i = 0; i < maxFiles; i++) {
     const file = txtFiles[i];
     try {
@@ -622,25 +665,40 @@ async function mineKnowledgeBase(sessionId, env) {
         
         if (events.decisions.length > 0) {
           for (const dec of events.decisions.slice(0, 3)) {
-            allLayers.push(buildLayer(layerIndex++, 'decision', dec.text, file.name));
+            const layer = buildLayer(layerIndex++, 'decision', dec.text, file.name);
+            allLayers.push(layer);
+            anchorLeaf.push(layer);
           }
         }
         
         if (events.benchmarks.length > 0) {
           for (const bm of events.benchmarks.slice(0, 3)) {
-            allLayers.push(buildLayer(layerIndex++, 'benchmark', bm.text, file.name));
+            const layer = buildLayer(layerIndex++, 'benchmark', bm.text, file.name);
+            allLayers.push(layer);
+            operationalLeaf.push(layer);
+          }
+        }
+        
+        if (events.code.length > 0) {
+          for (const code of events.code.slice(0, 2)) {
+            const layer = buildLayer(layerIndex++, 'code', code.text, file.name);
+            allLayers.push(layer);
+            chaosLeaf.push(layer);
           }
         }
         
         if (events.architecture.length > 0) {
           for (const arch of events.architecture.slice(0, 2)) {
-            allLayers.push(buildLayer(layerIndex++, 'architecture', arch.text, file.name));
+            const layer = buildLayer(layerIndex++, 'architecture', arch.text, file.name);
+            allLayers.push(layer);
+            forensicLeaf.push(layer);
           }
         }
         
         if (events.pedagogy.vocab.length > 0) {
           for (const vocab of events.pedagogy.vocab.slice(0, 2)) {
-            allLayers.push(buildLayer(layerIndex++, 'vocab', vocab.text, file.name));
+            const layer = buildLayer(layerIndex++, 'vocab', vocab.text, file.name);
+            allLayers.push(layer);
           }
         }
       }
@@ -651,8 +709,12 @@ async function mineKnowledgeBase(sessionId, env) {
     if (allLayers.length >= 200) break;
   }
   
+  // FIX 2: Compute 4-leaf Merkle root
+  const merkleRoot = await buildMerkleRoot(anchorLeaf, operationalLeaf, chaosLeaf, forensicLeaf);
+  
   for (let i = 0; i < allLayers.length; i++) {
     allLayers[i].hash = await sha256(allLayers[i].id + allLayers[i].type + allLayers[i].content);
+    allLayers[i].merkle_root = merkleRoot;
   }
   
   const chunkSize = 50;
@@ -675,7 +737,8 @@ async function mineKnowledgeBase(sessionId, env) {
     layerCount: allLayers.length,
     layerChunks: Math.ceil(allLayers.length / chunkSize),
     lastMined: new Date().toISOString(),
-    totalFiles: txtFiles.length
+    totalFiles: txtFiles.length,
+    merkle_root: merkleRoot
   };
   
   await doStub.fetch('https://fake/knowledge/set', {
@@ -683,7 +746,7 @@ async function mineKnowledgeBase(sessionId, env) {
     body: JSON.stringify({ meta: meta })
   });
   
-  return { cached: false, count: fileNames.length, total: txtFiles.length, layers: allLayers.length };
+  return { cached: false, count: fileNames.length, total: txtFiles.length, layers: allLayers.length, merkle_root: merkleRoot };
 }
 
 async function queryKnowledgeBase(query, sessionId, env) {
@@ -753,7 +816,7 @@ async function processChatMessage(message, sessionId, env) {
       if (mineResult.cached) {
         specialAction = `Already mined. ${mineResult.count} files, ${mineResult.layers} layers loaded.`;
       } else {
-        specialAction = `Mining complete. ${mineResult.count}/${mineResult.total} files loaded, ${mineResult.layers} layers extracted.`;
+        specialAction = `Mining complete. ${mineResult.count}/${mineResult.total} files loaded, ${mineResult.layers} layers extracted. Merkle root: ${mineResult.merkle_root.slice(0, 16)}...`;
       }
     } catch (err) {
       specialAction = `Mining failed: ${err.message}`;
@@ -764,9 +827,13 @@ async function processChatMessage(message, sessionId, env) {
     const verifyResp = await doStub.fetch('https://fake/verify');
     const verifyData = await verifyResp.json();
     if (verifyData.valid) {
-      specialAction = `Ledger verified. ${verifyData.ledgerLength} entries valid.`;
+      specialAction = `Ledger verified. ${verifyData.ledgerLength} entries valid. STONESKY: ${verifyData.stone_sky ? '✅' : '❌'}`;
     } else {
-      specialAction = `⚠️ LEDGER TAMPERED at index ${verifyData.invalidIndex}`;
+      if (verifyData.chainBrokenAt >= 0) {
+        specialAction = `⚠️ CHAIN BROKEN at index ${verifyData.chainBrokenAt}. Expected prevHash: ${verifyData.expectedPrevHash?.slice(0, 8)}..., got: ${verifyData.actualPrevHash?.slice(0, 8)}...`;
+      } else {
+        specialAction = `⚠️ LEDGER TAMPERED at index ${verifyData.invalidIndex}. Expected hash: ${verifyData.expectedHash?.slice(0, 8)}..., got: ${verifyData.actualHash?.slice(0, 8)}...`;
+      }
     }
   }
   
@@ -1432,10 +1499,10 @@ export default {
     if (url.pathname === '/health') {
       return new Response(JSON.stringify({
         ok: true,
-        version: 'v129-B3-SMART-SUMMARY',
+        version: 'v130-B2-STONESKY-COMPLETE',
         benchmarks: {
           'b0+b1': '✅ Voice + text',
-          b2: '✅ STONESKY ledger',
+          b2: '✅ STONESKY ledger + 4-leaf Merkle',
           b3: '✅ KB mining + Gemini summaries', 
           b4: '⏳ Pending',
           b5: '⏳ Pending'
@@ -1476,6 +1543,6 @@ export default {
       }
     }
     
-    return new Response('Phoenix OB1 v129-B3-SMART-SUMMARY', { status: 404 });
+    return new Response('Phoenix OB1 v130-B2-STONESKY-COMPLETE', { status: 404 });
   }
 };
