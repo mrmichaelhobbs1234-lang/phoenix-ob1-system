@@ -1429,6 +1429,14 @@ const MAGIC_CHAT_HTML = `<!DOCTYPE html>
       align-self: flex-start;
       white-space: pre-wrap;
     }
+    .message.system { 
+      background: rgba(168,85,247,0.05); 
+      border: 1px solid #a855f7; 
+      align-self: center;
+      text-align: center;
+      max-width: 90%;
+      font-size: 0.95rem;
+    }
     .input-area { 
       padding: 1.5rem; 
       border-top: 1px solid #a855f7; 
@@ -1503,6 +1511,8 @@ const MAGIC_CHAT_HTML = `<!DOCTYPE html>
     const textInput = document.getElementById('text-input');
     const sessionId = 'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
     let isRecording = false;
+    let onboardingMode = false;
+    let studentId = null;
     
     function showError(msg) {
       errorBox.textContent = msg;
@@ -1518,12 +1528,54 @@ const MAGIC_CHAT_HTML = `<!DOCTYPE html>
       chat.scrollTop = chat.scrollHeight;
     }
     
+    async function checkStudentStatus() {
+      try {
+        const resp = await fetch('/student/resolve', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'Content-Type': 'application/json' }
+        });
+        
+        if (!resp.ok) {
+          throw new Error('Failed to resolve student status');
+        }
+        
+        const data = await resp.json();
+        studentId = data.studentId;
+        
+        if (data.onboarding_required) {
+          onboardingMode = true;
+          addMessage('system', '🎙️ Welcome to Phoenix Rising Protocol');
+          addMessage('system', 'Voice channel opening in 2 seconds...');
+          textInput.disabled = true;
+          textInput.style.display = 'none';
+          
+          setTimeout(() => {
+            addMessage('assistant', "Hi! I'm Obi. Let's get you set up. What's your name?");
+            startVoice();
+          }, 2000);
+        }
+      } catch (err) {
+        showError('Setup error: ' + err.message);
+      }
+    }
+    
     async function sendToObi(message) {
       try {
+        const payload = { 
+          message: message, 
+          sessionId: sessionId
+        };
+        
+        if (onboardingMode && studentId) {
+          payload.studentId = studentId;
+        }
+        
         const resp = await fetch('/chat', {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: message, sessionId: sessionId })
+          body: JSON.stringify(payload)
         });
         
         if (!resp.ok) {
@@ -1533,6 +1585,15 @@ const MAGIC_CHAT_HTML = `<!DOCTYPE html>
         
         const data = await resp.json();
         addMessage('assistant', data.reply);
+        
+        if (data.onboardingComplete === true && onboardingMode) {
+          onboardingMode = false;
+          textInput.disabled = false;
+          textInput.style.display = '';
+          setTimeout(() => {
+            addMessage('system', '✅ Setup complete. Ready to practice.');
+          }, 1000);
+        }
       } catch (err) {
         showError(err.message);
       }
@@ -1544,6 +1605,14 @@ const MAGIC_CHAT_HTML = `<!DOCTYPE html>
         ws = new WebSocket(wsUrl);
         
         ws.onopen = async () => {
+          if (onboardingMode && studentId) {
+            ws.send(JSON.stringify({ 
+              type: '__phoenix_session_start',
+              studentId: studentId,
+              sessionId: sessionId
+            }));
+          }
+          
           stream = await navigator.mediaDevices.getUserMedia({ audio: true });
           const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
             ? 'audio/webm;codecs=opus'
@@ -1617,6 +1686,9 @@ const MAGIC_CHAT_HTML = `<!DOCTYPE html>
         await sendToObi(msg);
       }
     });
+    
+    // Initialize on page load
+    checkStudentStatus();
   </script>
 </body>
 </html>`;
