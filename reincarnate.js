@@ -1308,7 +1308,7 @@ var reincarnate_default = {
     if (url.pathname === "/health") {
       return new Response(JSON.stringify({
         ok: true,
-        version: "v130-OBI-CANON",
+        version: "v131-ONBOARDING-ROUTED",
         benchmarks: {
           "b0-b": "✅ Obi Canon onboarding",
           b1: "✅ Voice + text",
@@ -1379,7 +1379,7 @@ var reincarnate_default = {
         });
       }
     }
-    return new Response("Phoenix OB1 v130-OBI-CANON", { status: 404 });
+    return new Response("Phoenix OB1 v131-ONBOARDING-ROUTED", { status: 404 });
   }
 };
 export { SessionDO, StudentProfileDO, reincarnate_default as default };
