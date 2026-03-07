@@ -185,7 +185,7 @@ var SessionDO = class {
       });
     }
     if (url.pathname === "/onboarding/get") {
-      const state = await this.state.storage.get("onboarding:state") || { step: "start", data: {} };
+      const state = await this.state.storage.get("onboarding:state") || { step: 0, collected: {} };
       return new Response(JSON.stringify(state), {
         headers: { "Content-Type": "application/json" }
       });
@@ -345,8 +345,27 @@ var StudentProfileDO = class {
       return new Response(JSON.stringify(profile), { headers: { "Content-Type": "application/json" } });
     }
     if (url.pathname === "/profile/create" && request.method === "POST") {
-      const { studentId, name, age, region, goals, hobbies } = await request.json();
-      const profile = { studentId, name, age, region, goals, hobbies, weak_phonemes: "[]", strong_phonemes: "[]", session_count: 0, total_minutes: 0, last_session: null, onboarding_complete: 0, created_at: new Date().toISOString() };
+      const { studentId, name, location, birthplace, level, goals, confidence, occupation, fear, history, motivation } = await request.json();
+      const profile = { 
+        studentId, 
+        name, 
+        location, 
+        birthplace, 
+        level, 
+        goals, 
+        confidence, 
+        occupation, 
+        fear, 
+        history, 
+        motivation,
+        weak_phonemes: "[]", 
+        strong_phonemes: "[]", 
+        session_count: 0, 
+        total_minutes: 0, 
+        last_session: null, 
+        onboarding_complete: 0, 
+        created_at: new Date().toISOString() 
+      };
       await this.state.storage.put("profile:" + studentId, profile);
       return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
     }
@@ -361,6 +380,40 @@ var StudentProfileDO = class {
 };
 __name(StudentProfileDO, "StudentProfileDO");
 
+const OBI_CANON_ONBOARDING_PROMPT = `You are Obi — the AI voice of Natural English Training. You are the digital extension of Michael Hobbs: a Canadian ESL teacher in Ho Chi Minh City who is unfiltered, high-energy, deeply human, and has zero tolerance for silence. You celebrate hard when students engage. You call out bullshit gently but directly. You use analogies students actually understand. You are funny, sharp, and self-aware. You are NOT a generic AI assistant. You are Michael Hobbs in AI form.
+
+Your job right now is to onboard this student through natural conversation. You need to extract these 10 data points — but do it like a curious, sharp coach having a real conversation, NOT a form:
+
+1. Full name (first and last)
+2. Current city/location
+3. Birthplace
+4. English level (self-assessed)
+5. Goals
+6. Areas of confidence
+7. Occupation/Industry
+8. Fear or shame trigger — the specific moment they freeze
+9. Learning history — what they tried before and why it failed
+10. Motivation source — why NOW
+
+RULES:
+- You speak FIRST. Open with: "Hi! My name is Obi, your English coach at Natural English Training. I'm really excited to meet you! Let's start simple — could you tell me your full name? For example, you could say: My name is Nguyen Van An."
+- Always model correct sentence structure when students give fragments. Say: "Great! Try saying the full sentence: My name is [their name]."
+- React naturally to answers. If they say Ho Chi Minh City: "Amazing — Vietnam's economic capital! Did you grow up there?"
+- If a student gives a fragment or invalid answer, do not accept it. Redirect naturally.
+- If a student seems stuck or confused, switch to simple Vietnamese to unblock them, then immediately return to English.
+- Detect beginner vs advanced from first 3 responses. Simplify questions if beginner.
+- Celebrate when students give full sentences: "Yes! Perfect sentence! That's exactly how to say it."
+- Never move to next data point until current one is clearly collected.
+- When all 10 data points are collected, respond with: "ONBOARDING_COMPLETE:[firstname]" — this triggers profile creation.
+- Track weak phonemes silently from context throughout — note any pronunciation struggles.
+
+CURRENT ONBOARDING STATE:
+Step: {{STEP}}/10
+Collected so far:
+{{COLLECTED}}
+
+Respond naturally as Obi. Keep it conversational, energetic, and real.`;
+
 async function processOnboardingMessage(message, sessionId, studentId, env) {
   const doId = env.SESSIONS.idFromName(sessionId);
   const doStub = env.SESSIONS.get(doId);
@@ -368,27 +421,51 @@ async function processOnboardingMessage(message, sessionId, studentId, env) {
   const stateResp = await doStub.fetch('https://fake/onboarding/get');
   const state = await stateResp.json();
   
-  let reply = '';
-  let nextStep = state.step;
-  const data = { ...state.data };
+  const collected = state.collected || {};
+  const step = state.step || 0;
   
-  if (state.step === 'start') {
-    reply = "Hi! I'm Obi. Let's get you set up. What's your name?";
-    nextStep = 'name';
-  } else if (state.step === 'name') {
-    data.name = message.trim();
-    reply = `Nice to meet you ${data.name}! How old are you?`;
-    nextStep = 'age';
-  } else if (state.step === 'age') {
-    data.age = message.trim();
-    reply = "Great! Where are you from?";
-    nextStep = 'region';
-  } else if (state.step === 'region') {
-    data.region = message.trim();
-    reply = "Perfect. What's your main goal with English?";
-    nextStep = 'goals';
-  } else if (state.step === 'goals') {
-    data.goals = message.trim();
+  const collectedText = Object.keys(collected).map(k => `${k}: ${collected[k]}`).join('\n') || 'None yet';
+  const systemPrompt = OBI_CANON_ONBOARDING_PROMPT
+    .replace('{{STEP}}', step.toString())
+    .replace('{{COLLECTED}}', collectedText);
+  
+  const historyResp = await doStub.fetch("https://fake/history");
+  const { messages } = await historyResp.json();
+  
+  await doStub.fetch("https://fake/add", {
+    method: "POST",
+    body: JSON.stringify({ role: "user", content: message, userId: "student" })
+  });
+  
+  const geminiMessages = [
+    { role: "user", parts: [{ text: systemPrompt }] },
+    { role: "model", parts: [{ text: "Understood. I am Obi. Conversational, natural onboarding." }] }
+  ];
+  
+  for (const msg of messages.slice(-20)) {
+    geminiMessages.push({
+      role: msg.role === "user" ? "user" : "model",
+      parts: [{ text: msg.content }]
+    });
+  }
+  
+  geminiMessages.push({ role: "user", parts: [{ text: message }] });
+  
+  let reply = '';
+  try {
+    reply = await callGemini(geminiMessages, env, 15000);
+  } catch (err) {
+    reply = "Sorry, I had a connection issue. Could you repeat that?";
+  }
+  
+  await doStub.fetch("https://fake/add", {
+    method: "POST",
+    body: JSON.stringify({ role: "assistant", content: reply, userId: "obi" })
+  });
+  
+  if (reply.includes('ONBOARDING_COMPLETE:')) {
+    const match = reply.match(/ONBOARDING_COMPLETE:([^\s]+)/);
+    const firstname = match ? match[1] : collected.name || 'Student';
     
     const profileDoId = env.STUDENT_PROFILES.idFromName(studentId);
     const profileStub = env.STUDENT_PROFILES.get(profileDoId);
@@ -396,11 +473,16 @@ async function processOnboardingMessage(message, sessionId, studentId, env) {
       method: 'POST',
       body: JSON.stringify({
         studentId,
-        name: data.name,
-        age: data.age,
-        region: data.region,
-        goals: data.goals,
-        hobbies: ''
+        name: collected.name || 'Unknown',
+        location: collected.location || '',
+        birthplace: collected.birthplace || '',
+        level: collected.level || '',
+        goals: collected.goals || '',
+        confidence: collected.confidence || '',
+        occupation: collected.occupation || '',
+        fear: collected.fear || '',
+        history: collected.history || '',
+        motivation: collected.motivation || ''
       })
     });
     await profileStub.fetch('https://fake/profile/seal', {
@@ -408,18 +490,50 @@ async function processOnboardingMessage(message, sessionId, studentId, env) {
       body: JSON.stringify({ studentId })
     });
     
-    reply = `You're all set ${data.name}! Let's start learning.`;
-    nextStep = 'complete';
+    reply = `You're all set ${firstname}! Welcome to Natural English Training. Let's start your journey.`;
   } else {
-    reply = "Onboarding already complete.";
+    const newCollected = { ...collected };
+    const msgLower = message.toLowerCase();
+    
+    if (!newCollected.name && (msgLower.includes('my name') || msgLower.includes('i am') || msgLower.includes("i'm"))) {
+      newCollected.name = message.trim();
+    }
+    if (!newCollected.location && (msgLower.includes('live in') || msgLower.includes('from') || msgLower.includes('city') || msgLower.includes('saigon') || msgLower.includes('ho chi minh'))) {
+      newCollected.location = message.trim();
+    }
+    if (!newCollected.birthplace && (msgLower.includes('born') || msgLower.includes('grew up'))) {
+      newCollected.birthplace = message.trim();
+    }
+    if (!newCollected.level && (msgLower.includes('beginner') || msgLower.includes('intermediate') || msgLower.includes('advanced') || msgLower.includes('level'))) {
+      newCollected.level = message.trim();
+    }
+    if (!newCollected.goals && (msgLower.includes('goal') || msgLower.includes('want to') || msgLower.includes('need to') || msgLower.includes('improve'))) {
+      newCollected.goals = message.trim();
+    }
+    if (!newCollected.confidence && (msgLower.includes('confident') || msgLower.includes('good at') || msgLower.includes('comfortable'))) {
+      newCollected.confidence = message.trim();
+    }
+    if (!newCollected.occupation && (msgLower.includes('work') || msgLower.includes('job') || msgLower.includes('company') || msgLower.includes('student'))) {
+      newCollected.occupation = message.trim();
+    }
+    if (!newCollected.fear && (msgLower.includes('afraid') || msgLower.includes('nervous') || msgLower.includes('scared') || msgLower.includes('freeze'))) {
+      newCollected.fear = message.trim();
+    }
+    if (!newCollected.history && (msgLower.includes('tried') || msgLower.includes('studied') || msgLower.includes('class') || msgLower.includes('before'))) {
+      newCollected.history = message.trim();
+    }
+    if (!newCollected.motivation && (msgLower.includes('because') || msgLower.includes('now') || msgLower.includes('need') || msgLower.includes('why'))) {
+      newCollected.motivation = message.trim();
+    }
+    
+    const newStep = Object.keys(newCollected).length;
+    await doStub.fetch('https://fake/onboarding/set', {
+      method: 'POST',
+      body: JSON.stringify({ step: newStep, collected: newCollected })
+    });
   }
   
-  await doStub.fetch('https://fake/onboarding/set', {
-    method: 'POST',
-    body: JSON.stringify({ step: nextStep, data })
-  });
-  
-  return { reply, aiUsed: 'onboarding' };
+  return { reply, aiUsed: 'onboarding-obi' };
 }
 __name(processOnboardingMessage, "processOnboardingMessage");
 
@@ -455,8 +569,8 @@ async function callGemini(messages, env, timeoutMs = 1e4) {
         body: JSON.stringify({
           contents: messages,
           generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 1e3
+            temperature: 0.8,
+            maxOutputTokens: 1200
           }
         }),
         signal: controller.signal
@@ -657,7 +771,7 @@ async function processChatMessage(message, sessionId, env) {
         if (profile) {
           const weakPhonemes = JSON.parse(profile.weak_phonemes || '[]').join(', ') || 'none yet';
           const strongPhonemes = JSON.parse(profile.strong_phonemes || '[]').join(', ') || 'none yet';
-          studentContext = '\n\n## STUDENT CONTEXT\nName: ' + profile.name + '\nAge: ' + profile.age + ', Region: ' + profile.region + '\nLevel: ' + profile.level + '/10\nGoals: ' + (profile.goals || 'not specified') + '\nWeak phonemes: [' + weakPhonemes + ']\nStrong phonemes: [' + strongPhonemes + ']\nSessions completed: ' + profile.session_count + '\nTotal practice time: ' + profile.total_minutes + ' minutes\nLast session: ' + (profile.last_session || 'never') + '\n';
+          studentContext = '\n\n## STUDENT CONTEXT\nName: ' + profile.name + '\nLocation: ' + profile.location + '\nBirthplace: ' + profile.birthplace + '\nLevel: ' + profile.level + '\nGoals: ' + (profile.goals || 'not specified') + '\nConfidence areas: ' + profile.confidence + '\nOccupation: ' + profile.occupation + '\nFear trigger: ' + profile.fear + '\nLearning history: ' + profile.history + '\nMotivation: ' + profile.motivation + '\nWeak phonemes: [' + weakPhonemes + ']\nStrong phonemes: [' + strongPhonemes + ']\nSessions completed: ' + profile.session_count + '\nTotal practice time: ' + profile.total_minutes + ' minutes\nLast session: ' + (profile.last_session || 'never') + '\n';
         }
       }
     }
@@ -749,7 +863,7 @@ async function processChatMessage(message, sessionId, env) {
   } else if (meta && meta.fileCount) {
     knowledgeStatus = `KB: ${meta.fileCount} files, ${meta.layerCount} layers`;
   }
-  const systemPrompt = `You are Obi, AI core of Phoenix Rising Protocol.
+  const systemPrompt = `You are Obi, AI core of Natural English Training.
 
 ## CRITICAL - NO EXCEPTIONS
 1. NEVER generate unsolicited greetings or instructions
@@ -847,7 +961,7 @@ var MAGIC_CHAT_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Phoenix Magic Chat</title>
+  <title>Natural English Training</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: monospace; background: #0f0f1a; color: #a855f7; height: 100vh; display: flex; flex-direction: column; }
@@ -1018,7 +1132,7 @@ var MAGIC_CHAT_HTML = `<!DOCTYPE html>
         onboardingMode = true;
         textInput.disabled = true;
         textInput.classList.add('hidden');
-        addSystemMessage('Welcome to Phoenix Rising Protocol');
+        addSystemMessage('Welcome to Natural English Training!');
         addSystemMessage('Voice channel opening in 2 seconds...');
         setTimeout(() => {
           startVoice();
@@ -1056,10 +1170,10 @@ var reincarnate_default = {
     }
 
     if (url.pathname === '/student/create' && request.method === 'POST') {
-      const { studentId, name, age, region, goals, hobbies } = await request.json();
+      const { studentId, name, location, birthplace, level, goals, confidence, occupation, fear, history, motivation } = await request.json();
       const profileDoId = env.STUDENT_PROFILES.idFromName(studentId);
       const profileStub = env.STUDENT_PROFILES.get(profileDoId);
-      await profileStub.fetch('https://fake/profile/create', { method: 'POST', body: JSON.stringify({ studentId, name, age, region, goals, hobbies }) });
+      await profileStub.fetch('https://fake/profile/create', { method: 'POST', body: JSON.stringify({ studentId, name, location, birthplace, level, goals, confidence, occupation, fear, history, motivation }) });
       await profileStub.fetch('https://fake/profile/seal', { method: 'POST', body: JSON.stringify({ studentId }) });
       return new Response(JSON.stringify({ ok: true, studentId }), {
         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Set-Cookie': 'phoenix_student_id=' + studentId + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000' }
@@ -1194,9 +1308,10 @@ var reincarnate_default = {
     if (url.pathname === "/health") {
       return new Response(JSON.stringify({
         ok: true,
-        version: "v128-ONBOARDING-FLOW",
+        version: "v130-OBI-CANON",
         benchmarks: {
-          "b0+b1": "✅ Voice + text",
+          "b0-b": "✅ Obi Canon onboarding",
+          b1: "✅ Voice + text",
           b2: "✅ STONESKY ledger",
           b3: "⚠️ Dynamic (mine to load)",
           b4: "⏳ Pending",
@@ -1264,7 +1379,7 @@ var reincarnate_default = {
         });
       }
     }
-    return new Response("Phoenix OB1 v128-ONBOARDING-FLOW", { status: 404 });
+    return new Response("Phoenix OB1 v130-OBI-CANON", { status: 404 });
   }
 };
 export { SessionDO, StudentProfileDO, reincarnate_default as default };
