@@ -780,6 +780,7 @@ var MAGIC_CHAT_HTML = `<!DOCTYPE html>
     .message { padding: 1rem; border-radius: 8px; max-width: 70%; word-wrap: break-word; line-height: 1.5; }
     .message.user { background: rgba(168,85,247,0.2); border: 1px solid #a855f7; align-self: flex-end; }
     .message.assistant { background: rgba(245,158,11,0.1); border: 1px solid #f59e0b; align-self: flex-start; white-space: pre-wrap; }
+    .message.system { background: rgba(139,92,246,0.1); border: 1px solid #8b5cf6; align-self: center; text-align: center; max-width: 90%; }
     .input-area { padding: 1.5rem; border-top: 1px solid #a855f7; display: flex; gap: 1rem; align-items: center; }
     input { flex: 1; background: rgba(168,85,247,0.1); border: 1px solid #a855f7; color: #a855f7; padding: 1rem; font-family: monospace; font-size: 1rem; border-radius: 6px; }
     input:focus { outline: none; border-color: #f59e0b; }
@@ -806,6 +807,7 @@ var MAGIC_CHAT_HTML = `<!DOCTYPE html>
     const textInput = document.getElementById('text-input');
     const sessionId = 'session-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
     let isRecording = false;
+    let onboardingMode = false;
 
     function showError(msg) {
       errorBox.textContent = msg;
@@ -821,6 +823,26 @@ var MAGIC_CHAT_HTML = `<!DOCTYPE html>
       chat.scrollTop = chat.scrollHeight;
     }
 
+    function addSystemMessage(text) {
+      const msg = document.createElement('div');
+      msg.className = 'message system';
+      msg.textContent = text;
+      chat.appendChild(msg);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    async function checkStudentStatus() {
+      try {
+        const resp = await fetch('/student/resolve', { method: 'POST' });
+        if (!resp.ok) throw new Error('Failed to check student status');
+        const data = await resp.json();
+        return data;
+      } catch (err) {
+        showError('Status check failed: ' + err.message);
+        return { onboarding_required: false };
+      }
+    }
+
     async function sendToObi(message) {
       try {
         const resp = await fetch('/chat', {
@@ -834,6 +856,17 @@ var MAGIC_CHAT_HTML = `<!DOCTYPE html>
         }
         const data = await resp.json();
         addMessage('assistant', data.reply);
+
+        if (onboardingMode) {
+          const statusData = await checkStudentStatus();
+          if (!statusData.onboarding_required) {
+            onboardingMode = false;
+            textInput.disabled = false;
+            textInput.classList.remove('hidden');
+            textInput.placeholder = 'Type or speak...';
+            addSystemMessage('Onboarding complete. Text input enabled.');
+          }
+        }
       } catch (err) {
         showError(err.message);
       }
@@ -903,6 +936,20 @@ var MAGIC_CHAT_HTML = `<!DOCTYPE html>
         await sendToObi(msg);
       }
     });
+
+    (async function init() {
+      const statusData = await checkStudentStatus();
+      if (statusData.onboarding_required) {
+        onboardingMode = true;
+        textInput.disabled = true;
+        textInput.classList.add('hidden');
+        addSystemMessage('Welcome to Phoenix Rising Protocol');
+        addSystemMessage('Voice channel opening in 2 seconds...');
+        setTimeout(() => {
+          startVoice();
+        }, 2000);
+      }
+    })();
   <\/script>
 </body>
 </html>`;
@@ -1072,7 +1119,7 @@ var reincarnate_default = {
     if (url.pathname === "/health") {
       return new Response(JSON.stringify({
         ok: true,
-        version: "v126-B0B-RESTORED",
+        version: "v127-B0B-FRONTEND",
         benchmarks: {
           "b0+b1": "✅ Voice + text",
           b2: "✅ STONESKY ledger",
@@ -1115,7 +1162,7 @@ var reincarnate_default = {
         });
       }
     }
-    return new Response("Phoenix OB1 v126-B0B-RESTORED", { status: 404 });
+    return new Response("Phoenix OB1 v127-B0B-FRONTEND", { status: 404 });
   }
 };
 export { SessionDO, StudentProfileDO, reincarnate_default as default };
