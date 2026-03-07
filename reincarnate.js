@@ -317,6 +317,37 @@ var SessionDO = class {
     return new Response("SessionDO ready", { status: 200 });
   }
 };
+
+var StudentProfileDO = class {
+  constructor(state, env) {
+    this.state = state;
+    this.env = env;
+  }
+  async fetch(request) {
+    const url = new URL(request.url);
+    if (url.pathname === "/profile/get") {
+      const studentId = url.searchParams.get("student_id");
+      const profile = await this.state.storage.get("profile:" + studentId) || null;
+      if (!profile) return new Response(JSON.stringify(null), { status: 404, headers: { "Content-Type": "application/json" } });
+      return new Response(JSON.stringify(profile), { headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname === "/profile/create" && request.method === "POST") {
+      const { studentId, name, age, region, goals, hobbies } = await request.json();
+      const profile = { studentId, name, age, region, goals, hobbies, weak_phonemes: "[]", strong_phonemes: "[]", session_count: 0, total_minutes: 0, last_session: null, onboarding_complete: 0, created_at: new Date().toISOString() };
+      await this.state.storage.put("profile:" + studentId, profile);
+      return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
+    }
+    if (url.pathname === "/profile/seal" && request.method === "POST") {
+      const { studentId } = await request.json();
+      const profile = await this.state.storage.get("profile:" + studentId);
+      if (profile) { profile.onboarding_complete = 1; await this.state.storage.put("profile:" + studentId, profile); }
+      return new Response(JSON.stringify({ ok: true }), { headers: { "Content-Type": "application/json" } });
+    }
+    return new Response("StudentProfileDO ready", { status: 200 });
+  }
+};
+__name(StudentProfileDO, "StudentProfileDO");
+
 function needsDeepSeek(message, geminiReply) {
   const triggers = [
     /what is|define|explain|tell me about/i,
@@ -537,6 +568,26 @@ async function processChatMessage(message, sessionId, env) {
   if (!message || !sessionId) {
     throw new Error("Missing message or sessionId");
   }
+  
+  let studentContext = '';
+  try {
+    const cookies = env.__cookies || {};
+    const studentId = cookies.phoenix_student_id;
+    if (studentId && env.STUDENT_PROFILES) {
+      const profileDoId = env.STUDENT_PROFILES.idFromName(studentId);
+      const profileStub = env.STUDENT_PROFILES.get(profileDoId);
+      const profileResp = await profileStub.fetch('https://fake/profile/get?student_id=' + studentId);
+      if (profileResp.ok) {
+        const profile = await profileResp.json();
+        if (profile) {
+          const weakPhonemes = JSON.parse(profile.weak_phonemes || '[]').join(', ') || 'none yet';
+          const strongPhonemes = JSON.parse(profile.strong_phonemes || '[]').join(', ') || 'none yet';
+          studentContext = '\n\n## STUDENT CONTEXT\nName: ' + profile.name + '\nAge: ' + profile.age + ', Region: ' + profile.region + '\nLevel: ' + profile.level + '/10\nGoals: ' + (profile.goals || 'not specified') + '\nWeak phonemes: [' + weakPhonemes + ']\nStrong phonemes: [' + strongPhonemes + ']\nSessions completed: ' + profile.session_count + '\nTotal practice time: ' + profile.total_minutes + ' minutes\nLast session: ' + (profile.last_session || 'never') + '\n';
+        }
+      }
+    }
+  } catch (err) {}
+  
   if (isRageSignal(message)) {
     return { reply: "System failure detected. What specifically broke?", aiUsed: "system" };
   }
@@ -656,7 +707,7 @@ ${knowledgeStatus || "KB not mined"}
 
 ## Citation rule
 Cite: "From [exact file], Layer [ID]: [quote]"
-Only cite sources in [VERIFIED KB] block above.`;
+Only cite sources in [VERIFIED KB] block above.` + studentContext;
   const geminiMessages = [
     { role: "user", parts: [{ text: systemPrompt }] },
     { role: "model", parts: [{ text: "Understood. Concise, no greetings, no echo, cite only verified sources." }] }
@@ -858,6 +909,51 @@ var MAGIC_CHAT_HTML = `<!DOCTYPE html>
 var reincarnate_default = {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    
+    if (url.pathname === '/student/resolve' && request.method === 'POST') {
+      const cookieHeader = request.headers.get('Cookie') || '';
+      const match = cookieHeader.match(/phoenix_student_id=([^;]+)/);
+      const studentId = match ? match[1] : null;
+      if (!studentId) {
+        const newStudentId = 'student-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+        return new Response(JSON.stringify({ onboarding_required: true, studentId: newStudentId }), {
+          headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Set-Cookie': 'phoenix_student_id=' + newStudentId + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000' }
+        });
+      }
+      try {
+        const profileDoId = env.STUDENT_PROFILES.idFromName(studentId);
+        const profileStub = env.STUDENT_PROFILES.get(profileDoId);
+        const profileResp = await profileStub.fetch('https://fake/profile/get?student_id=' + studentId);
+        if (!profileResp.ok) return new Response(JSON.stringify({ onboarding_required: true, studentId }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+        const profile = await profileResp.json();
+        const required = !profile || profile.onboarding_complete === 0;
+        return new Response(JSON.stringify({ onboarding_required: required, studentId }), { headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' } });
+      }
+    }
+
+    if (url.pathname === '/student/create' && request.method === 'POST') {
+      const { studentId, name, age, region, goals, hobbies } = await request.json();
+      const profileDoId = env.STUDENT_PROFILES.idFromName(studentId);
+      const profileStub = env.STUDENT_PROFILES.get(profileDoId);
+      await profileStub.fetch('https://fake/profile/create', { method: 'POST', body: JSON.stringify({ studentId, name, age, region, goals, hobbies }) });
+      await profileStub.fetch('https://fake/profile/seal', { method: 'POST', body: JSON.stringify({ studentId }) });
+      return new Response(JSON.stringify({ ok: true, studentId }), {
+        headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Set-Cookie': 'phoenix_student_id=' + studentId + '; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000' }
+      });
+    }
+    
+    if (request.method === "OPTIONS") {
+      return new Response(null, {
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+          "Access-Control-Allow-Headers": "Content-Type, x-sovereign-key"
+        }
+      });
+    }
+    
     if (url.pathname === "/mine") {
       const sessionId = url.searchParams.get("sessionId");
       if (!sessionId) {
@@ -968,15 +1064,6 @@ var reincarnate_default = {
       });
       return new Response(null, { status: 101, webSocket: clientWs });
     }
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, x-sovereign-key"
-        }
-      });
-    }
     if (url.pathname === "/" || url.pathname === "/voice-chat" || url.pathname === "/voice-chat.html" || url.pathname === "/magic-chat" || url.pathname === "/magic-chat.html") {
       return new Response(MAGIC_CHAT_HTML, {
         headers: { "Content-Type": "text/html", "Cache-Control": "no-cache" }
@@ -985,7 +1072,7 @@ var reincarnate_default = {
     if (url.pathname === "/health") {
       return new Response(JSON.stringify({
         ok: true,
-        version: "v125-VOICE-FIXED",
+        version: "v126-B0B-RESTORED",
         benchmarks: {
           "b0+b1": "✅ Voice + text",
           b2: "✅ STONESKY ledger",
@@ -999,7 +1086,12 @@ var reincarnate_default = {
     }
     if (url.pathname === "/chat" && request.method === "POST") {
       try {
-        const { message, sessionId } = await request.json();
+        const body = await request.json();
+        const { message, sessionId } = body;
+        const cookieHeader = request.headers.get('Cookie') || '';
+        const cookieMatch = cookieHeader.match(/phoenix_student_id=([^;]+)/);
+        const envWithCookies = { ...env, __cookies: { phoenix_student_id: cookieMatch ? cookieMatch[1] : null } };
+        
         if (!message || !sessionId) {
           return new Response(JSON.stringify({ error: "Missing message or sessionId" }), {
             status: 400,
@@ -1012,7 +1104,7 @@ var reincarnate_default = {
             headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
           });
         }
-        const { reply, aiUsed } = await processChatMessage(message, sessionId, env);
+        const { reply, aiUsed } = await processChatMessage(message, sessionId, envWithCookies);
         return new Response(JSON.stringify({ ok: true, reply, aiUsed, sessionId }), {
           headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
         });
@@ -1023,7 +1115,7 @@ var reincarnate_default = {
         });
       }
     }
-    return new Response("Phoenix OB1 v125-VOICE-FIXED", { status: 404 });
+    return new Response("Phoenix OB1 v126-B0B-RESTORED", { status: 404 });
   }
 };
-export { SessionDO, reincarnate_default as default };
+export { SessionDO, StudentProfileDO, reincarnate_default as default };
