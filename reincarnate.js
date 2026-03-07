@@ -184,6 +184,19 @@ var SessionDO = class {
         headers: { "Content-Type": "application/json" }
       });
     }
+    if (url.pathname === "/onboarding/get") {
+      const state = await this.state.storage.get("onboarding:state") || { step: "start", data: {} };
+      return new Response(JSON.stringify(state), {
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (url.pathname === "/onboarding/set" && request.method === "POST") {
+      const state = await request.json();
+      await this.state.storage.put("onboarding:state", state);
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "Content-Type": "application/json" }
+      });
+    }
     if (url.pathname === "/knowledge/get") {
       const meta = await this.state.storage.get("knowledge:meta") || { fileCount: 0, layerCount: 0, lastMined: null };
       return new Response(JSON.stringify(meta), {
@@ -347,6 +360,68 @@ var StudentProfileDO = class {
   }
 };
 __name(StudentProfileDO, "StudentProfileDO");
+
+async function processOnboardingMessage(message, sessionId, studentId, env) {
+  const doId = env.SESSIONS.idFromName(sessionId);
+  const doStub = env.SESSIONS.get(doId);
+  
+  const stateResp = await doStub.fetch('https://fake/onboarding/get');
+  const state = await stateResp.json();
+  
+  let reply = '';
+  let nextStep = state.step;
+  const data = { ...state.data };
+  
+  if (state.step === 'start') {
+    reply = "Hi! I'm Obi. Let's get you set up. What's your name?";
+    nextStep = 'name';
+  } else if (state.step === 'name') {
+    data.name = message.trim();
+    reply = `Nice to meet you ${data.name}! How old are you?`;
+    nextStep = 'age';
+  } else if (state.step === 'age') {
+    data.age = message.trim();
+    reply = "Great! Where are you from?";
+    nextStep = 'region';
+  } else if (state.step === 'region') {
+    data.region = message.trim();
+    reply = "Perfect. What's your main goal with English?";
+    nextStep = 'goals';
+  } else if (state.step === 'goals') {
+    data.goals = message.trim();
+    
+    const profileDoId = env.STUDENT_PROFILES.idFromName(studentId);
+    const profileStub = env.STUDENT_PROFILES.get(profileDoId);
+    await profileStub.fetch('https://fake/profile/create', {
+      method: 'POST',
+      body: JSON.stringify({
+        studentId,
+        name: data.name,
+        age: data.age,
+        region: data.region,
+        goals: data.goals,
+        hobbies: ''
+      })
+    });
+    await profileStub.fetch('https://fake/profile/seal', {
+      method: 'POST',
+      body: JSON.stringify({ studentId })
+    });
+    
+    reply = `You're all set ${data.name}! Let's start learning.`;
+    nextStep = 'complete';
+  } else {
+    reply = "Onboarding already complete.";
+  }
+  
+  await doStub.fetch('https://fake/onboarding/set', {
+    method: 'POST',
+    body: JSON.stringify({ step: nextStep, data })
+  });
+  
+  return { reply, aiUsed: 'onboarding' };
+}
+__name(processOnboardingMessage, "processOnboardingMessage");
 
 function needsDeepSeek(message, geminiReply) {
   const triggers = [
@@ -1119,7 +1194,7 @@ var reincarnate_default = {
     if (url.pathname === "/health") {
       return new Response(JSON.stringify({
         ok: true,
-        version: "v127-B0B-FRONTEND",
+        version: "v128-ONBOARDING-FLOW",
         benchmarks: {
           "b0+b1": "✅ Voice + text",
           b2: "✅ STONESKY ledger",
@@ -1137,7 +1212,8 @@ var reincarnate_default = {
         const { message, sessionId } = body;
         const cookieHeader = request.headers.get('Cookie') || '';
         const cookieMatch = cookieHeader.match(/phoenix_student_id=([^;]+)/);
-        const envWithCookies = { ...env, __cookies: { phoenix_student_id: cookieMatch ? cookieMatch[1] : null } };
+        const studentId = cookieMatch ? cookieMatch[1] : null;
+        const envWithCookies = { ...env, __cookies: { phoenix_student_id: studentId } };
         
         if (!message || !sessionId) {
           return new Response(JSON.stringify({ error: "Missing message or sessionId" }), {
@@ -1151,8 +1227,34 @@ var reincarnate_default = {
             headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
           });
         }
-        const { reply, aiUsed } = await processChatMessage(message, sessionId, envWithCookies);
-        return new Response(JSON.stringify({ ok: true, reply, aiUsed, sessionId }), {
+        
+        let isOnboarding = false;
+        if (studentId && env.STUDENT_PROFILES) {
+          try {
+            const profileDoId = env.STUDENT_PROFILES.idFromName(studentId);
+            const profileStub = env.STUDENT_PROFILES.get(profileDoId);
+            const profileResp = await profileStub.fetch('https://fake/profile/get?student_id=' + studentId);
+            if (!profileResp.ok || profileResp.status === 404) {
+              isOnboarding = true;
+            } else {
+              const profile = await profileResp.json();
+              if (!profile || profile.onboarding_complete === 0) {
+                isOnboarding = true;
+              }
+            }
+          } catch (err) {
+            isOnboarding = true;
+          }
+        }
+        
+        let result;
+        if (isOnboarding) {
+          result = await processOnboardingMessage(message, sessionId, studentId, envWithCookies);
+        } else {
+          result = await processChatMessage(message, sessionId, envWithCookies);
+        }
+        
+        return new Response(JSON.stringify({ ok: true, reply: result.reply, aiUsed: result.aiUsed, sessionId }), {
           headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" }
         });
       } catch (err) {
@@ -1162,7 +1264,7 @@ var reincarnate_default = {
         });
       }
     }
-    return new Response("Phoenix OB1 v127-B0B-FRONTEND", { status: 404 });
+    return new Response("Phoenix OB1 v128-ONBOARDING-FLOW", { status: 404 });
   }
 };
 export { SessionDO, StudentProfileDO, reincarnate_default as default };
